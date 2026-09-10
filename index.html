@@ -1107,6 +1107,9 @@ svg.leaflet-image-layer.leaflet-interactive path {
       <button class="btn gold" id="gps-diag-run">▶️ Testar agora</button>
       <button class="btn ghost" id="gps-diag-watch">📍 Rastrear 20s (ver se o ponto se move)</button>
     </div>
+    <div class="row-actions" style="margin-top:6px;">
+      <button class="btn ghost" id="gps-diag-open-settings">⚙️ Abrir configuração de localização do Android</button>
+    </div>
   </div>
 </div>
 
@@ -4918,7 +4921,8 @@ document.getElementById('camera-input').addEventListener('change', async (ev) =>
 // ============================================================
 // Geolocalização com fallback manual
 // ============================================================
-function getCurrentPositionSafe() {
+function getCurrentPositionSafe(timeoutMs) {
+  timeoutMs = timeoutMs || 12000;
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) { reject(new Error('Geolocalização não disponível neste navegador.')); return; }
     // Navegadores modernos (Chrome/Safari no Android e iOS) BLOQUEIAM o pedido
@@ -4937,11 +4941,12 @@ function getCurrentPositionSafe() {
     // isso mantemos um cronômetro NOSSO, independente do navegador, que
     // sempre desiste depois de um tempo, não importa o que o aparelho faça.
     let resolvido = false;
+    const segundosLimite = Math.round(timeoutMs / 1000);
     const watchdog = setTimeout(() => {
       if (resolvido) return;
       resolvido = true;
-      reject(new Error('O aparelho não respondeu ao pedido de GPS depois de 12 segundos (isso costuma acontecer em alguns celulares/navegadores mais antigos, por um problema do próprio aparelho, não do app). Tente novamente, ative a localização de alta precisão nas configurações do Android, ou informe a coordenada manualmente.'));
-    }, 12000);
+      reject(new Error('O aparelho não respondeu ao pedido de GPS depois de ' + segundosLimite + ' segundos. Sem internet, a primeira localização pode demorar mais (o GPS precisa "ouvir" os satélites sozinho, sem ajuda da rede). Tente novamente ao ar livre, ou informe a coordenada manualmente.'));
+    }, timeoutMs);
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         if (resolvido) return;
@@ -4955,9 +4960,26 @@ function getCurrentPositionSafe() {
         clearTimeout(watchdog);
         reject(new Error(err.message || 'Não foi possível obter a localização.'));
       },
-      { enableHighAccuracy: true, timeout: 11000, maximumAge: 0 }
+      { enableHighAccuracy: true, timeout: Math.max(0, timeoutMs - 1000), maximumAge: 0 }
     );
   });
+}
+
+// Tenta abrir a tela de configurações de localização do próprio Android
+// direto do navegador, usando um "intent" (recurso do Chrome no Android).
+// Não funciona em iOS/Safari nem em todos os navegadores — nesses casos,
+// mostramos a instrução manual em vez de falhar silenciosamente.
+function openAndroidLocationSettings() {
+  const isAndroid = /Android/i.test(navigator.userAgent);
+  if (!isAndroid) {
+    alert('Esse atalho só funciona em celulares Android pelo Chrome.\n\nNo seu aparelho, abra: Configurações > Localização/Privacidade, e ajuste o modo de localização manualmente.');
+    return;
+  }
+  try {
+    window.location.href = 'intent:#Intent;action=android.settings.LOCATION_SOURCE_SETTINGS;end';
+  } catch (e) {
+    alert('Não consegui abrir automaticamente. Abra manualmente: Configurações do Android > Localização.');
+  }
 }
 
 // Tenta extrair a coordenada GPS que a própria câmera do celular já grava no
@@ -5084,24 +5106,33 @@ async function runGpsDiagnostic() {
     } catch (e) { /* nem todo navegador suporta consultar isso; segue sem essa info */ }
   }
 
-  gpsDiagLog('Pedindo localização com ALTA precisão (GPS)... (até 12s)');
+  const DIAG_TIMEOUT_MS = 45000;
+  gpsDiagLog('Pedindo localização com ALTA precisão (GPS)... (até ' + Math.round(DIAG_TIMEOUT_MS / 1000) + 's — sem internet pode demorar mais que o normal)');
   const inicio = Date.now();
   try {
-    const coord = await getCurrentPositionSafe();
+    const coord = await getCurrentPositionSafe(DIAG_TIMEOUT_MS);
     const segundos = ((Date.now() - inicio) / 1000).toFixed(1);
     gpsDiagLog('✅ Localização obtida em ' + segundos + 's.');
     gpsDiagLog('Latitude: ' + coord.lat.toFixed(6) + ' | Longitude: ' + coord.lng.toFixed(6));
     gpsDiagLog('Precisão informada pelo aparelho: ' + (coord.accuracy ? Math.round(coord.accuracy) + ' metros' : 'não informada'));
-    let diagnostico = '✅ O GPS deste aparelho está funcionando bem com o app (levou ' + segundos + 's).';
-    if (coord.accuracy && coord.accuracy > 100) {
-      diagnostico += ' A precisão ficou fraca (' + Math.round(coord.accuracy) + 'm) — experimente testar de novo ao ar livre, longe de paredes/telhados.';
+
+    let diagnostico = '✅ O GPS deste aparelho está funcionando com o app (levou ' + segundos + 's).';
+    if (coord.accuracy) {
+      const acc = Math.round(coord.accuracy);
+      if (acc <= 30) {
+        diagnostico += ' Precisão de ' + acc + 'm — isso é típico de sinal de satélite (GPS) real. 🛰️ Bom sinal para uso em campo, inclusive sem internet.';
+      } else if (acc <= 100) {
+        diagnostico += ' Precisão de ' + acc + 'm — razoável, mas dá pra melhorar. Teste de novo ao ar livre, longe de paredes/telhados, pra ver se cai abaixo de 30m.';
+      } else {
+        diagnostico += ' ⚠️ Precisão de ' + acc + 'm é fraca demais — isso é típico de localização por Wi-Fi/rede móvel, NÃO por satélite GPS de verdade. Esse tipo de localização não é confiável sem internet, que é justamente a situação em campo. Verifique se o modo de localização do Android está em "Somente GPS"/"Apenas dispositivo" (veja o botão de atalho abaixo) e teste de novo, de preferência ao ar livre.';
+      }
     }
     document.getElementById('gps-diag-result').textContent = diagnostico;
     gpsDiagShowMap(coord.lat, coord.lng, coord.accuracy);
   } catch (e) {
     gpsDiagLog('❌ Falhou: ' + e.message);
     document.getElementById('gps-diag-result').textContent =
-      '❌ Não consegui obter a localização neste aparelho. Causas mais comuns: localização desativada nas configurações do celular, permissão de localização negada para o navegador, modo avião/economia de bateria ativo, ou estar num ambiente fechado sem sinal. Tente novamente ao ar livre com a localização em modo "Alta precisão".';
+      '❌ Não consegui obter a localização neste aparelho. Causas mais comuns: localização desativada nas configurações do celular, permissão de localização negada para o navegador, modo avião/economia de bateria ativo, ou estar num ambiente fechado sem sinal. Tente novamente ao ar livre com a localização em modo "Alta precisão", ou use o botão de atalho abaixo para checar a configuração do Android.';
   }
 }
 
@@ -5140,6 +5171,7 @@ function runGpsDiagWatch() {
   }, 20000);
 }
 
+document.getElementById('gps-diag-open-settings').addEventListener('click', openAndroidLocationSettings);
 document.getElementById('btn-gps-diag').addEventListener('click', () => {
   document.getElementById('gps-diag-log').textContent = 'Toque em "Testar agora" pra começar.';
   document.getElementById('gps-diag-result').textContent = '';
@@ -5813,21 +5845,55 @@ function forceDownload(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
 async function shareBlob(blob, filename, mimeType, title) {
+  // Tentativa 1: compartilhar o arquivo com o tipo MIME original (ex: application/zip).
   try {
     const file = new File([blob], filename, { type: mimeType });
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
       await navigator.share({ files: [file], title: title || filename });
       return 'shared';
     }
-    if (navigator.share) {
-      // Navegador tem a API mas não aceita compartilhar arquivos deste tipo/tamanho.
-      await navigator.share({ title: title || filename });
+  } catch (e) {
+    if (e && e.name === 'AbortError') return 'cancelled';
+    console.warn('Falha ao compartilhar com o tipo MIME original, tentando tipo genérico:', e);
+  }
+
+  // Tentativa 2: alguns navegadores/Android recusam certos tipos MIME (ex: .zip)
+  // mas aceitam o mesmo arquivo com um tipo genérico.
+  try {
+    const genericFile = new File([blob], filename, { type: 'application/octet-stream' });
+    if (navigator.canShare && navigator.canShare({ files: [genericFile] })) {
+      await navigator.share({ files: [genericFile], title: title || filename });
       return 'shared';
     }
   } catch (e) {
     if (e && e.name === 'AbortError') return 'cancelled';
-    console.warn('Compartilhamento via menu nativo falhou, tentando baixar o arquivo:', e);
+    console.warn('Falha ao compartilhar com tipo genérico, tentando novamente sem checagem prévia:', e);
   }
+
+  // Tentativa 3: alguns navegadores não implementam navigator.canShare corretamente
+  // mas ainda assim conseguem compartilhar o arquivo se chamarmos share() direto.
+  if (navigator.share) {
+    try {
+      const file = new File([blob], filename, { type: mimeType });
+      await navigator.share({ files: [file], title: title || filename });
+      return 'shared';
+    } catch (e) {
+      if (e && e.name === 'AbortError') return 'cancelled';
+      console.warn('Falha ao compartilhar arquivo diretamente, tentando compartilhar só o título:', e);
+    }
+
+    // Tentativa 4: compartilhamento sem arquivo (apenas título) — o navegador tem
+    // a Web Share API mas não aceita arquivos deste tipo/tamanho de forma alguma.
+    try {
+      await navigator.share({ title: title || filename });
+      return 'shared-no-file';
+    } catch (e) {
+      if (e && e.name === 'AbortError') return 'cancelled';
+      console.warn('Compartilhamento via menu nativo falhou completamente, baixando o arquivo:', e);
+    }
+  }
+
+  // Último recurso: download forçado, para o usuário compartilhar manualmente depois.
   try {
     forceDownload(blob, filename);
     return 'downloaded';
@@ -5839,11 +5905,22 @@ async function shareBlob(blob, filename, mimeType, title) {
 document.getElementById('btn-share-last').addEventListener('click', async () => {
   const f = state.lastGeneratedFile;
   if (!f) return;
-  const result = await shareBlob(f.blob, f.filename, f.mimeType, f.filename);
-  if (result === 'downloaded') {
-    alert(`Este dispositivo/navegador não abriu o menu de compartilhamento direto. O arquivo "${f.filename}" foi baixado — abra a pasta Downloads (ou o gerenciador de arquivos) e toque em "Compartilhar" nele para enviar pelo Telegram, WhatsApp, Google Drive etc.`);
-  } else if (result === 'failed') {
-    alert(`Não foi possível compartilhar nem baixar o arquivo automaticamente. Use o arquivo "${f.filename}" já salvo na pasta do relatório para enviar manualmente.`);
+  const btn = document.getElementById('btn-share-last');
+  const originalLabel = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '📤 Preparando...';
+  try {
+    const result = await shareBlob(f.blob, f.filename, f.mimeType, f.filename);
+    if (result === 'shared-no-file') {
+      alert(`O menu de compartilhamento abriu, mas este navegador não permitiu anexar o arquivo diretamente. O arquivo "${f.filename}" continua salvo na pasta do relatório — anexe-o manualmente pelo app escolhido.`);
+    } else if (result === 'downloaded') {
+      alert(`Este dispositivo/navegador não abriu o menu de compartilhamento direto. O arquivo "${f.filename}" foi baixado — abra a pasta Downloads (ou o gerenciador de arquivos) e toque em "Compartilhar" nele para enviar pelo Telegram, WhatsApp, Google Drive etc.`);
+    } else if (result === 'failed') {
+      alert(`Não foi possível compartilhar nem baixar o arquivo automaticamente. Use o arquivo "${f.filename}" já salvo na pasta do relatório para enviar manualmente.`);
+    }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalLabel;
   }
 });
 
