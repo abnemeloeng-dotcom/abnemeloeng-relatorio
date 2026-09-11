@@ -6170,6 +6170,17 @@ async function exportBackup(reportId) {
 // Inicialização
 // ============================================================
 restoreLocalRootHandle().finally(() => goToReportsScreen());
+
+// Registra o Service Worker: na primeira visita (com internet) ele salva
+// uma cópia completa do app no aparelho. Nas próximas vezes, mesmo sem
+// nenhuma internet, o app abre normalmente a partir dessa cópia salva.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch((e) => {
+      console.warn('Não foi possível registrar o Service Worker (o app ainda funciona, mas sem garantia de cache offline):', e);
+    });
+  });
+}
 </script>
 </body>
 </html>
