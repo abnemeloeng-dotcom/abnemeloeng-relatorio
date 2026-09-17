@@ -1218,6 +1218,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
     <button class="modal-close-x" id="modal-settings-close">✕</button>
     <h3>⚙️ Configurações do cabeçalho</h3>
     <div class="hint">A logo e os dados abaixo serão usados no cabeçalho de todos os relatórios em PDF. Escolha a imagem da logo e toque em "Salvar configurações".</div>
+    <div class="hint" id="settings-sync-status" style="display:none;"></div>
     <label class="field-label">Logo da empresa — será exibida no PDF</label>
     <input type="file" accept="image/*" id="settings-logo-input">
     <img id="settings-logo-preview" class="settings-preview-logo" style="display:none;">
@@ -4191,11 +4192,111 @@ SOFTWARE.
 })();
 
 </script>
+<!-- Firebase (usado só para sincronizar a configuração de cabeçalho entre aparelhos; veja CLOUD_CONFIG mais abaixo) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script>
 // ============================================================
 // App: Relatório Fotográfico de Campo
-// Tudo roda local, sem servidor. Fotos ficam em IndexedDB.
+// Tudo roda local (IndexedDB) por padrão. Fotos ficam sempre locais.
+// A configuração de cabeçalho (logo/empresa/endereço/responsável e as
+// listas de municípios/equipes/supervisores) pode opcionalmente ser
+// sincronizada via Firebase, para que todos que abrem o link vejam a
+// mesma configuração automaticamente. Veja CLOUD_CONFIG logo abaixo.
 // ============================================================
+
+// ------------------------------------------------------------
+// CONFIGURAÇÃO DE NUVEM (Firebase) — PREENCHA COM OS DADOS DO SEU
+// PROJETO FIREBASE PARA ATIVAR A SINCRONIZAÇÃO COMPARTILHADA.
+// Enquanto os campos abaixo estiverem vazios, o app funciona 100%
+// local, exatamente como antes (nada muda).
+//
+// Como obter esses valores:
+// 1. Acesse https://console.firebase.google.com e crie um projeto
+//    gratuito (plano Spark).
+// 2. Em "Compilação" > "Firestore Database", clique em "Criar banco
+//    de dados" (pode escolher modo de produção; ajustaremos as regras
+//    de acesso abaixo).
+// 3. Em "Regras" do Firestore, cole:
+//      rules_version = '2';
+//      service cloud.firestore {
+//        match /databases/{database}/documents {
+//          match /shared_config/{docId} {
+//            allow read, write: if true;
+//          }
+//        }
+//      }
+//    Atenção: isso deixa a configuração compartilhada aberta para
+//    leitura/escrita por qualquer pessoa que tenha o link do app.
+//    Está adequado para uso interno em equipe pequena; não coloque
+//    nada sensível nesse documento.
+// 4. Em "Configurações do projeto" (ícone de engrenagem) > geral,
+//    role até "Seus apps", clique em "Adicionar app" > Web (</>) e
+//    copie o objeto "firebaseConfig" gerado para dentro do objeto
+//    CLOUD_CONFIG abaixo.
+// ------------------------------------------------------------
+const CLOUD_CONFIG = {
+  apiKey: "AIzaSyBrUdGqwZIaT8yGH_XXsx1TLBRWTbuotAc",
+  authDomain: "rel-fotografico-campo.firebaseapp.com",
+  projectId: "rel-fotografico-campo",
+  storageBucket: "rel-fotografico-campo.firebasestorage.app",
+  messagingSenderId: "238315032722",
+  appId: "1:238315032722:web:14bea4da1e780b451a964b",
+};
+const CLOUD_SYNC_ENABLED = !!(CLOUD_CONFIG.apiKey && CLOUD_CONFIG.projectId);
+const CLOUD_COLLECTION = 'shared_config';
+const CLOUD_DOC_ID = 'header_settings';
+let cloudDb = null;
+if (CLOUD_SYNC_ENABLED) {
+  try {
+    firebase.initializeApp(CLOUD_CONFIG);
+    cloudDb = firebase.firestore();
+  } catch (e) {
+    console.warn('Não foi possível iniciar a sincronização em nuvem:', e);
+  }
+}
+
+// Busca a configuração compartilhada na nuvem. Retorna null se a
+// sincronização não estiver ativada, se estiver offline, ou se ainda
+// não houver nada salvo na nuvem.
+async function fetchCloudSettings() {
+  if (!cloudDb) return null;
+  try {
+    const snap = await cloudDb.collection(CLOUD_COLLECTION).doc(CLOUD_DOC_ID).get();
+    if (!snap.exists) return null;
+    return snap.data();
+  } catch (e) {
+    console.warn('Falha ao buscar configuração na nuvem (usando cópia local):', e);
+    return null;
+  }
+}
+
+// Envia a configuração para a nuvem, para todo mundo que abrir o link
+// passar a ver essa mesma configuração.
+async function pushCloudSettings(settings) {
+  if (!cloudDb) return false;
+  try {
+    const payload = Object.assign({}, settings, { updatedAt: Date.now() });
+    await cloudDb.collection(CLOUD_COLLECTION).doc(CLOUD_DOC_ID).set(payload);
+    return true;
+  } catch (e) {
+    console.warn('Falha ao enviar configuração para a nuvem:', e);
+    return false;
+  }
+}
+
+// Ao abrir o app: se a sincronização estiver ativa, baixa a
+// configuração da nuvem e atualiza a cópia local (IndexedDB), para que
+// telas de geração de PDF/KMZ etc. (que leem só do IndexedDB) já usem
+// a versão mais recente mesmo sem o usuário abrir a tela de
+// configurações.
+async function syncSettingsFromCloudOnLoad() {
+  if (!CLOUD_SYNC_ENABLED) return;
+  const cloud = await fetchCloudSettings();
+  if (cloud) {
+    await dbPut('settings', Object.assign({ id: 'default' }, cloud));
+  }
+}
 
 const DB_NAME = 'relatorio_fotografico_db';
 const DB_VERSION = 1;
@@ -5808,7 +5909,27 @@ const renderSupervisorList = setupCadRegistration(
   { get: () => pendingSupervisores }, 'settings-supervisor-new', 'settings-supervisor-add', 'settings-supervisor-list');
 
 async function openSettingsModal() {
-  const s = (await dbGet('settings', 'default')) || {};
+  const syncStatus = document.getElementById('settings-sync-status');
+  let s = (await dbGet('settings', 'default')) || {};
+
+  if (CLOUD_SYNC_ENABLED) {
+    syncStatus.style.display = '';
+    syncStatus.style.color = 'inherit';
+    syncStatus.textContent = '🔄 Buscando configuração compartilhada...';
+    const cloud = await fetchCloudSettings();
+    if (cloud) {
+      s = cloud;
+      await dbPut('settings', Object.assign({ id: 'default' }, cloud));
+      syncStatus.style.color = 'var(--verde)';
+      syncStatus.textContent = '☁️ Configuração compartilhada carregada.';
+    } else {
+      syncStatus.style.color = 'var(--laranja)';
+      syncStatus.textContent = '⚠️ Sem conexão com a nuvem agora — mostrando a última cópia salva neste aparelho.';
+    }
+  } else {
+    syncStatus.style.display = 'none';
+  }
+
   document.getElementById('settings-company-name').value = s.companyName || '';
   document.getElementById('settings-company-address').value = s.address || '';
   document.getElementById('settings-responsible').value = s.responsible || '';
@@ -5852,7 +5973,25 @@ document.getElementById('modal-settings-save').addEventListener('click', async (
     supervisores: pendingSupervisores.slice(),
   };
   await dbPut('settings', settings);
-  document.getElementById('modal-settings').classList.remove('show');
+
+  const syncStatus = document.getElementById('settings-sync-status');
+  if (CLOUD_SYNC_ENABLED) {
+    syncStatus.style.display = '';
+    syncStatus.style.color = 'inherit';
+    syncStatus.textContent = '🔄 Enviando para todos os aparelhos...';
+    const ok = await pushCloudSettings(settings);
+    if (ok) {
+      syncStatus.style.color = 'var(--verde)';
+      syncStatus.textContent = '✅ Salvo e compartilhado — quem abrir o link já vai ver essa configuração.';
+    } else {
+      syncStatus.style.color = 'var(--vermelho)';
+      syncStatus.textContent = '❌ Salvo só neste aparelho — sem conexão com a nuvem agora. Abra as configurações de novo quando estiver online para reenviar.';
+    }
+    // dá um tempo pro usuário ler o status antes de fechar
+    setTimeout(() => document.getElementById('modal-settings').classList.remove('show'), 900);
+  } else {
+    document.getElementById('modal-settings').classList.remove('show');
+  }
 });
 
 // ============================================================
@@ -6487,6 +6626,7 @@ async function exportBackup(reportId) {
 // Inicialização
 // ============================================================
 restoreLocalRootHandle().finally(() => goToReportsScreen());
+syncSettingsFromCloudOnLoad().catch((e) => console.warn('Sincronização inicial falhou:', e));
 
 // Registra o Service Worker: na primeira visita (com internet) ele salva
 // uma cópia completa do app no aparelho. Nas próximas vezes, mesmo sem
