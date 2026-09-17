@@ -773,6 +773,25 @@ svg.leaflet-image-layer.leaflet-interactive path {
   label.field-label { display: block; font-size: 0.82rem; font-weight: 700; color: var(--texto-suave); margin: 10px 0 4px; }
   label.field-label:first-child { margin-top: 0; }
 
+  /* ---- cadastro (chips): municípios / equipes / supervisores ---- */
+  .cad-add-row { display: flex; gap: 6px; }
+  .cad-add-row input { flex: 1; }
+  .cad-add-row button { flex: 0 0 auto; min-height: 42px; padding: 0 14px; }
+  .chip-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .chip-list:empty::after { content: "Nenhum cadastrado ainda."; font-size: 0.8rem; color: var(--texto-suave); }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--cinza-bg); border: 1px solid var(--cinza-borda);
+    border-radius: 20px; padding: 5px 6px 5px 12px; font-size: 0.85rem;
+  }
+  .chip button {
+    background: none; border: none; color: var(--vermelho); cursor: pointer;
+    font-size: 0.95rem; line-height: 1; padding: 2px 4px;
+  }
+  .field-name-preview {
+    display: block; font-size: 0.78rem; color: var(--texto-suave); margin-top: 4px;
+  }
+
   /* ---- lista de relatórios ---- */
   .report-item, .pole-item {
     display: flex;
@@ -985,10 +1004,10 @@ svg.leaflet-image-layer.leaflet-interactive path {
     </div>
     <div class="card">
       <div class="row-actions">
-        <button class="btn gold" id="btn-new-pole">➕ Novo poste</button>
+        <button class="btn gold" id="btn-new-pole">➕ Nova atividade</button>
       </div>
       <div id="poles-list" style="margin-top:12px;"></div>
-      <div class="empty-state" id="poles-empty">Nenhum poste ainda. Toque em "Novo poste" e tire a 1ª foto (pé do poste) para travar a coordenada.</div>
+      <div class="empty-state" id="poles-empty">Nenhuma atividade ainda. Toque em "Nova atividade", escolha Poste / Poda / Outros e tire a 1ª foto para travar a coordenada.</div>
     </div>
     <div class="card">
       <h2>Gerar saídas</h2>
@@ -1011,15 +1030,15 @@ svg.leaflet-image-layer.leaflet-interactive path {
       <div id="pole-progress" class="hint" style="font-weight:700; color:var(--azul); margin-bottom:2px;"></div>
       <div id="pole-coord-info" class="hint"></div>
       <div class="row-actions" style="margin-top:8px;">
-        <button class="btn green" id="btn-add-photo">📷 Mais uma foto deste poste</button>
+        <button class="btn green" id="btn-add-photo">📷 Mais uma foto desta atividade</button>
       </div>
       <div class="photo-grid" id="pole-photo-grid"></div>
-      <div class="empty-state" id="pole-photos-empty">Nenhuma foto ainda. A primeira foto tirada define a coordenada deste poste (o "pé do poste").</div>
+      <div class="empty-state" id="pole-photos-empty">Nenhuma foto ainda. A primeira foto tirada define a coordenada desta atividade.</div>
     </div>
     <div class="card">
-      <div class="hint" style="margin-bottom:8px;">Terminou as fotos deste poste?</div>
+      <div class="hint" style="margin-bottom:8px;">Terminou as fotos desta atividade?</div>
       <div class="row-actions">
-        <button class="btn gold" id="btn-next-pole">➡️ Próximo poste</button>
+        <button class="btn gold" id="btn-next-pole">➡️ Próxima atividade</button>
         <button class="btn ghost" id="btn-finish-poles">🏁 Encerrar (voltar ao relatório)</button>
       </div>
     </div>
@@ -1119,17 +1138,19 @@ svg.leaflet-image-layer.leaflet-interactive path {
     <button class="modal-close-x" id="modal-new-report-close">✕</button>
     <h3>📋 Dados do relatório</h3>
     <label class="field-label">Nome do relatório</label>
-    <input type="text" id="new-report-name" placeholder="Ex: Linha Alpha - Trecho 3 - 08/08">
-    <label class="field-label">Nome da empresa</label>
-    <input type="text" id="new-report-company" placeholder="Ex: Empresa XYZ Engenharia">
+    <input type="text" id="new-report-name" placeholder="Ex: Linha Alpha - Trecho 3">
+    <small class="field-name-preview" id="new-report-name-preview"></small>
     <label class="field-label">Nota / OS</label>
     <input type="text" id="new-report-nota" placeholder="Ex: Nota 12345 / OS 6789">
     <label class="field-label">Município</label>
-    <input type="text" id="new-report-municipio" placeholder="Ex: Teresina - PI">
+    <select id="new-report-municipio"></select>
     <label class="field-label">Equipe</label>
-    <input type="text" id="new-report-equipe" placeholder="Ex: Equipe 02">
+    <select id="new-report-equipe"></select>
     <label class="field-label">Supervisor</label>
-    <input type="text" id="new-report-supervisor" placeholder="Nome do supervisor">
+    <select id="new-report-supervisor"></select>
+    <div class="hint" id="new-report-cad-hint" style="margin-top:8px; display:none;">
+      Município, equipe ou supervisor que você precisa não está na lista? Cadastre em ⚙️ Configurações do cabeçalho.
+    </div>
     <div class="row-actions" style="margin-top:12px;">
       <button class="btn green" id="modal-new-report-save">Criar relatório</button>
     </div>
@@ -1140,10 +1161,35 @@ svg.leaflet-image-layer.leaflet-interactive path {
 <div class="modal-overlay" id="modal-new-pole">
   <div class="modal-box">
     <button class="modal-close-x" id="modal-new-pole-close">✕</button>
-    <h3>Identificação do poste</h3>
-    <input type="text" id="new-pole-label" placeholder="Ex: Poste 12">
+    <h3>Nova atividade</h3>
+    <label class="field-label">Atividade</label>
+    <select id="new-pole-activity">
+      <option value="">Selecione...</option>
+      <option value="poste">Poste</option>
+      <option value="poda">Poda</option>
+      <option value="outros">Outros</option>
+    </select>
+    <div id="new-pole-label-wrap" style="display:none;">
+      <label class="field-label" id="new-pole-label-title">Identificação</label>
+      <input type="text" id="new-pole-label" placeholder="Ex: Poste 12">
+    </div>
+    <div id="new-pole-poda-wrap" style="display:none;">
+      <label class="field-label">Tipo de poda</label>
+      <select id="new-pole-poda-type">
+        <option value="">Selecione o tipo...</option>
+        <option>Poda Arv. Bambu_Unha Gato_Cerca Viva</option>
+        <option>Poda Arv.Pequena</option>
+        <option>Poda Arv.Média</option>
+        <option>Poda Arv.Grande</option>
+        <option>Elim. Arv.Pequena</option>
+        <option>Elim. Arv.Média</option>
+        <option>Elim. Arv. Grande</option>
+        <option>Faixa Mecanizada</option>
+        <option>Faixa Semi-mecanizada</option>
+      </select>
+    </div>
     <div class="row-actions" style="margin-top:12px;">
-      <button class="btn green" id="modal-new-pole-save">Criar poste</button>
+      <button class="btn green" id="modal-new-pole-save">Criar atividade</button>
     </div>
   </div>
 </div>
@@ -1163,6 +1209,32 @@ svg.leaflet-image-layer.leaflet-interactive path {
     <input type="text" id="settings-company-address" placeholder="Ex: Rua Tal, 123 - Teresina/PI">
     <label class="field-label">Responsável técnico</label>
     <input type="text" id="settings-responsible" placeholder="Ex: Abne Melo dos Santos">
+
+    <div class="hint" style="margin-top:16px; border-top:1px solid var(--cinza-borda); padding-top:12px;">
+      📋 Cadastre aqui os municípios, equipes e supervisores usados na sua operação. Depois, na tela "Dados do relatório", basta escolher da lista em vez de digitar toda vez.
+    </div>
+
+    <label class="field-label">Municípios cadastrados</label>
+    <div class="cad-add-row">
+      <input type="text" id="settings-municipio-new" placeholder="Ex: Teresina - PI">
+      <button class="btn ghost" id="settings-municipio-add">➕</button>
+    </div>
+    <div class="chip-list" id="settings-municipio-list"></div>
+
+    <label class="field-label">Equipes cadastradas</label>
+    <div class="cad-add-row">
+      <input type="text" id="settings-equipe-new" placeholder="Ex: Equipe 02">
+      <button class="btn ghost" id="settings-equipe-add">➕</button>
+    </div>
+    <div class="chip-list" id="settings-equipe-list"></div>
+
+    <label class="field-label">Supervisores cadastrados</label>
+    <div class="cad-add-row">
+      <input type="text" id="settings-supervisor-new" placeholder="Ex: Abne Melo">
+      <button class="btn ghost" id="settings-supervisor-add">➕</button>
+    </div>
+    <div class="chip-list" id="settings-supervisor-list"></div>
+
     <div class="row-actions" style="margin-top:12px;">
       <button class="btn green" id="modal-settings-save">💾 Salvar configurações</button>
     </div>
@@ -4240,8 +4312,8 @@ async function goToPoleScreen(poleId) {
   document.getElementById('screen-pole').style.display = '';
   document.getElementById('btn-back').classList.add('show');
   const pole = await dbGet('poles', poleId);
-  document.getElementById('header-title').textContent = pole ? pole.label : 'Poste';
-  document.getElementById('header-subtitle').textContent = 'Fotos deste poste';
+  document.getElementById('header-title').textContent = pole ? pole.label : 'Atividade';
+  document.getElementById('header-subtitle').textContent = 'Fotos desta atividade';
   renderPoleScreen();
 }
 async function polePositionLabel(pole) {
@@ -4249,7 +4321,7 @@ async function polePositionLabel(pole) {
   const poles = await dbGetAllByIndex('poles', 'reportId', pole.reportId);
   poles.sort((a, b) => a.createdAt - b.createdAt);
   const idx = poles.findIndex(p => p.id === pole.id);
-  return `📍 Poste ${idx + 1} de ${poles.length} neste relatório`;
+  return `📍 Atividade ${idx + 1} de ${poles.length} neste relatório`;
 }
 document.getElementById('btn-back').addEventListener('click', () => {
   if (state.screen === 'pole') goToReportScreen(state.currentReportId);
@@ -4306,14 +4378,58 @@ async function deleteReportCascade(reportId) {
   await dbDelete('reports', reportId);
 }
 
+// Data em 8 dígitos DDMMAAAA, para completar automaticamente o nome do relatório.
+function dateSuffix8(d) {
+  d = d || new Date();
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const yyyy = String(d.getFullYear());
+  return dd + mm + yyyy;
+}
+function updateNewReportNamePreview() {
+  const base = document.getElementById('new-report-name').value.trim();
+  const preview = document.getElementById('new-report-name-preview');
+  preview.textContent = base ? `Nome final do relatório: ${base}-${dateSuffix8()}` : '';
+}
+document.getElementById('new-report-name').addEventListener('input', updateNewReportNamePreview);
+
+// Preenche um <select> com uma lista cadastrada em Configurações, mantendo
+// a opção de deixar em branco quando nada estiver cadastrado ainda.
+function fillCadSelect(selectEl, items, previousValue) {
+  items = items || [];
+  selectEl.innerHTML = '';
+  const optBlank = document.createElement('option');
+  optBlank.value = '';
+  optBlank.textContent = items.length ? 'Selecione...' : '(nenhum cadastrado)';
+  selectEl.appendChild(optBlank);
+  items.forEach((item) => {
+    const opt = document.createElement('option');
+    opt.value = item;
+    opt.textContent = item;
+    selectEl.appendChild(opt);
+  });
+  // Se o valor anterior não estiver na lista cadastrada, adiciona ele mesmo
+  // assim (relatório antigo, digitado antes de existir o cadastro).
+  if (previousValue && !items.includes(previousValue)) {
+    const opt = document.createElement('option');
+    opt.value = previousValue;
+    opt.textContent = previousValue;
+    selectEl.appendChild(opt);
+  }
+  selectEl.value = previousValue || '';
+}
+
 document.getElementById('btn-new-report').addEventListener('click', async () => {
   document.getElementById('new-report-name').value = '';
+  updateNewReportNamePreview();
   const defaults = (await dbGet('settings', 'default')) || {};
-  document.getElementById('new-report-company').value = defaults.companyName || '';
   document.getElementById('new-report-nota').value = '';
-  document.getElementById('new-report-municipio').value = '';
-  document.getElementById('new-report-equipe').value = '';
-  document.getElementById('new-report-supervisor').value = defaults.supervisor || '';
+  fillCadSelect(document.getElementById('new-report-municipio'), defaults.municipios, '');
+  fillCadSelect(document.getElementById('new-report-equipe'), defaults.equipes, '');
+  fillCadSelect(document.getElementById('new-report-supervisor'), defaults.supervisores, defaults.supervisor || '');
+  const semCadastro = !(defaults.municipios && defaults.municipios.length) ||
+    !(defaults.equipes && defaults.equipes.length) || !(defaults.supervisores && defaults.supervisores.length);
+  document.getElementById('new-report-cad-hint').style.display = semCadastro ? '' : 'none';
   document.getElementById('modal-new-report').classList.add('show');
   setTimeout(() => document.getElementById('new-report-name').focus(), 150);
 });
@@ -4325,13 +4441,15 @@ document.getElementById('btn-select-local-folder').addEventListener('click', asy
 });
 
 document.getElementById('modal-new-report-save').addEventListener('click', async () => {
-  const name = document.getElementById('new-report-name').value.trim();
-  const companyName = document.getElementById('new-report-company').value.trim();
+  const baseName = document.getElementById('new-report-name').value.trim();
   const nota = document.getElementById('new-report-nota').value.trim();
   const municipio = document.getElementById('new-report-municipio').value.trim();
   const equipe = document.getElementById('new-report-equipe').value.trim();
   const supervisor = document.getElementById('new-report-supervisor').value.trim();
-  if (!name) { alert('Digite um nome para o relatório.'); return; }
+  if (!baseName) { alert('Digite um nome para o relatório.'); return; }
+
+  // O nome final sempre recebe o complemento automático da data (8 dígitos).
+  const name = `${baseName}-${dateSuffix8()}`;
 
   // O clique do usuário permite abrir o seletor de pasta.
   if (!localRootHandle && localFsSupported()) {
@@ -4343,7 +4461,7 @@ document.getElementById('modal-new-report-save').addEventListener('click', async
   }
 
   const report = { id: uid(), name, createdAt: Date.now(), localFolderName: sanitizeFilename(name),
-    companyName, nota, municipio, equipe, supervisor };
+    nota, municipio, equipe, supervisor };
   await dbPut('reports', report);
 
   try {
@@ -4477,24 +4595,81 @@ document.getElementById('btn-toggle-map').addEventListener('click', () => {
   renderReportMap();
 });
 
-async function openNewPoleModal() {
-  const poles = await dbGetAllByIndex('poles', 'reportId', state.currentReportId);
-  const defaultLabel = 'Poste ' + (poles.length + 1);
+// "Novo poste" virou "Nova atividade": o encarregado escolhe o tipo
+// (Poste / Poda / Outros) antes de identificar o item, pra não ficar em
+// dúvida se pode tirar foto de poda quando o app só falava em "poste".
+// Poste e Outros continuam com campo de digitação livre (cada poste tem
+// número próprio gravado nele). Poda usa uma lista fixa de serviços,
+// porque não é um número — é um tipo de serviço padronizado.
+const POLE_ACTIVITY_INFO = {
+  poste: { title: 'Identificação do poste', name: 'Poste' },
+  outros: { title: 'Identificação de Outros', name: 'Outros' },
+};
+async function updateNewPoleLabelField() {
+  const activity = document.getElementById('new-pole-activity').value;
+  const labelWrap = document.getElementById('new-pole-label-wrap');
+  const podaWrap = document.getElementById('new-pole-poda-wrap');
   const input = document.getElementById('new-pole-label');
+  labelWrap.style.display = 'none';
+  podaWrap.style.display = 'none';
+  if (!activity) return;
+
+  if (activity === 'poda') {
+    document.getElementById('new-pole-poda-type').value = '';
+    podaWrap.style.display = '';
+    setTimeout(() => document.getElementById('new-pole-poda-type').focus(), 100);
+    return;
+  }
+
+  const info = POLE_ACTIVITY_INFO[activity];
+  document.getElementById('new-pole-label-title').textContent = info.title;
+  const poles = await dbGetAllByIndex('poles', 'reportId', state.currentReportId);
+  const countSameType = poles.filter((p) => (p.activityType || 'poste') === activity).length;
+  const defaultLabel = info.name + ' ' + (countSameType + 1);
   input.value = '';
   input.placeholder = 'Ex: ' + defaultLabel;
+  labelWrap.style.display = '';
+  setTimeout(() => input.focus(), 100);
+}
+document.getElementById('new-pole-activity').addEventListener('change', updateNewPoleLabelField);
+
+async function openNewPoleModal() {
+  document.getElementById('new-pole-activity').value = '';
+  document.getElementById('new-pole-label-wrap').style.display = 'none';
+  document.getElementById('new-pole-poda-wrap').style.display = 'none';
+  document.getElementById('new-pole-label').value = '';
+  document.getElementById('new-pole-poda-type').value = '';
   document.getElementById('modal-new-pole').classList.add('show');
-  setTimeout(() => input.focus(), 150);
+  setTimeout(() => document.getElementById('new-pole-activity').focus(), 150);
 }
 document.getElementById('btn-new-pole').addEventListener('click', () => openNewPoleModal());
 document.getElementById('modal-new-pole-close').addEventListener('click', () => {
   document.getElementById('modal-new-pole').classList.remove('show');
 });
 document.getElementById('modal-new-pole-save').addEventListener('click', async () => {
+  const activity = document.getElementById('new-pole-activity').value;
+  if (!activity) { alert('Escolha a atividade: Poste, Poda ou Outros.'); return; }
+
   const poles = await dbGetAllByIndex('poles', 'reportId', state.currentReportId);
-  const defaultLabel = 'Poste ' + (poles.length + 1);
-  const label = document.getElementById('new-pole-label').value.trim() || defaultLabel;
-  const pole = { id: uid(), reportId: state.currentReportId, label, baseCoord: null, createdAt: Date.now() };
+  let label, extra = {};
+
+  if (activity === 'poda') {
+    const podaType = document.getElementById('new-pole-poda-type').value;
+    if (!podaType) { alert('Escolha o tipo de poda.'); return; }
+    const countSameType = poles.filter((p) => (p.activityType || 'poste') === 'poda').length;
+    label = podaType + ' ' + (countSameType + 1);
+    extra.podaType = podaType;
+  } else {
+    const info = POLE_ACTIVITY_INFO[activity];
+    const countSameType = poles.filter((p) => (p.activityType || 'poste') === activity).length;
+    const defaultLabel = info.name + ' ' + (countSameType + 1);
+    label = document.getElementById('new-pole-label').value.trim() || defaultLabel;
+  }
+
+  const pole = Object.assign(
+    { id: uid(), reportId: state.currentReportId, label, activityType: activity, baseCoord: null, createdAt: Date.now() },
+    extra
+  );
   await dbPut('poles', pole);
   document.getElementById('modal-new-pole').classList.remove('show');
   await goToPoleScreen(pole.id);
@@ -4507,8 +4682,8 @@ document.getElementById('btn-next-pole').addEventListener('click', async () => {
   const pole = await dbGet('poles', state.currentPoleId);
   const photos = await dbGetAllByIndex('photos', 'poleId', state.currentPoleId);
   const ok = confirm(
-    `"${pole ? pole.label : 'Este poste'}" está salvo com ${photos.length} foto(s).\n\n` +
-    `Ir para o próximo poste? A próxima foto que você tirar será o novo "pé do poste" (nova coordenada travada).`
+    `"${pole ? pole.label : 'Esta atividade'}" está salva com ${photos.length} foto(s).\n\n` +
+    `Ir para a próxima atividade? A próxima foto que você tirar será o novo ponto de referência (nova coordenada travada).`
   );
   if (!ok) return;
   await openNewPoleModal();
@@ -4529,8 +4704,8 @@ async function renderPoleScreen() {
 
   const infoEl = document.getElementById('pole-coord-info');
   infoEl.innerHTML = pole.baseCoord
-    ? `📍 Coordenada travada (pé do poste): <b>${pole.baseCoord.lat.toFixed(5)}, ${pole.baseCoord.lng.toFixed(5)}</b> — usada para posicionar o poste no mapa/KMZ. Cada foto mantém sua própria coordenada.`
-    : `Ainda sem coordenada. A próxima foto tirada será o "pé do poste" e vai travar a coordenada deste poste.`;
+    ? `📍 Coordenada travada: <b>${pole.baseCoord.lat.toFixed(5)}, ${pole.baseCoord.lng.toFixed(5)}</b> — usada para posicionar esta atividade no mapa/KMZ. Cada foto mantém sua própria coordenada.`
+    : `Ainda sem coordenada. A próxima foto tirada vai travar a coordenada desta atividade.`;
 
   const grid = document.getElementById('pole-photo-grid');
   const empty = document.getElementById('pole-photos-empty');
@@ -5567,6 +5742,53 @@ function escapeHtml(s) {
 // Configurações (logo, empresa, endereço, responsável)
 // ============================================================
 let pendingLogoDataUrl = null;
+let pendingMunicipios = [];
+let pendingEquipes = [];
+let pendingSupervisores = [];
+
+// Renderiza uma lista cadastrada (município/equipe/supervisor) como "chips"
+// com um botão de excluir em cada um.
+function renderCadList(listEl, items, onRemove) {
+  listEl.innerHTML = '';
+  items.forEach((item, idx) => {
+    const chip = document.createElement('span');
+    chip.className = 'chip';
+    chip.innerHTML = `<span></span><button title="Remover">✕</button>`;
+    chip.querySelector('span').textContent = item;
+    chip.querySelector('button').addEventListener('click', () => onRemove(idx));
+    listEl.appendChild(chip);
+  });
+}
+function setupCadRegistration(arrGetSet, inputId, addBtnId, listId) {
+  const listEl = document.getElementById(listId);
+  const render = () => renderCadList(listEl, arrGetSet.get(), (idx) => {
+    arrGetSet.get().splice(idx, 1);
+    render();
+  });
+  document.getElementById(addBtnId).addEventListener('click', () => {
+    const input = document.getElementById(inputId);
+    const val = input.value.trim();
+    if (!val) return;
+    if (arrGetSet.get().some((x) => x.toLowerCase() === val.toLowerCase())) {
+      input.value = '';
+      return;
+    }
+    arrGetSet.get().push(val);
+    input.value = '';
+    render();
+  });
+  document.getElementById(inputId).addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') { ev.preventDefault(); document.getElementById(addBtnId).click(); }
+  });
+  return render;
+}
+const renderMunicipioList = setupCadRegistration(
+  { get: () => pendingMunicipios }, 'settings-municipio-new', 'settings-municipio-add', 'settings-municipio-list');
+const renderEquipeList = setupCadRegistration(
+  { get: () => pendingEquipes }, 'settings-equipe-new', 'settings-equipe-add', 'settings-equipe-list');
+const renderSupervisorList = setupCadRegistration(
+  { get: () => pendingSupervisores }, 'settings-supervisor-new', 'settings-supervisor-add', 'settings-supervisor-list');
+
 async function openSettingsModal() {
   const s = (await dbGet('settings', 'default')) || {};
   document.getElementById('settings-company-name').value = s.companyName || '';
@@ -5577,6 +5799,14 @@ async function openSettingsModal() {
   if (pendingLogoDataUrl) { preview.src = pendingLogoDataUrl; preview.style.display = ''; }
   else { preview.style.display = 'none'; }
   document.getElementById('settings-logo-input').value = '';
+
+  pendingMunicipios = (s.municipios || []).slice();
+  pendingEquipes = (s.equipes || []).slice();
+  pendingSupervisores = (s.supervisores || []).slice();
+  renderMunicipioList();
+  renderEquipeList();
+  renderSupervisorList();
+
   document.getElementById('modal-settings').classList.add('show');
 }
 document.getElementById('modal-settings-close').addEventListener('click', () => {
@@ -5599,6 +5829,9 @@ document.getElementById('modal-settings-save').addEventListener('click', async (
     address: document.getElementById('settings-company-address').value.trim(),
     responsible: document.getElementById('settings-responsible').value.trim(),
     logoDataUrl: pendingLogoDataUrl,
+    municipios: pendingMunicipios.slice(),
+    equipes: pendingEquipes.slice(),
+    supervisores: pendingSupervisores.slice(),
   };
   await dbPut('settings', settings);
   document.getElementById('modal-settings').classList.remove('show');
@@ -5834,6 +6067,20 @@ function setLastGeneratedFile(blob, filename, mimeType) {
   const row = document.getElementById('share-row');
   if (row) row.style.display = '';
 }
+// Explica O MOTIVO real de o menu de compartilhar não ter aberto direto,
+// quando dá pra saber: páginas abertas como arquivo local — via gerenciador
+// de arquivos (content://) ou direto do cartão de memória (file://) — não
+// são um "contexto seguro" pro navegador, e o Android bloqueia o menu de
+// compartilhar nesse caso. Isso não é um bug do app; só funciona quando o
+// relatório é aberto por um link https:// (ex.: a página publicada no
+// GitHub Pages) — inclusive quando instalado como atalho/PWA a partir desse
+// link.
+function shareUnavailableReason() {
+  if (window.isSecureContext === false) {
+    return ' Isso costuma acontecer quando o relatório é aberto direto de um arquivo local (pelo gerenciador de arquivos ou pelo Bluetooth, por exemplo) em vez de abrir pelo link https:// do relatório. Abrindo pelo link (o mesmo endereço que começa com https://, salvo nos favoritos ou na tela inicial do celular), o menu de compartilhar deve abrir direto.';
+  }
+  return '';
+}
 function forceDownload(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -5914,7 +6161,7 @@ document.getElementById('btn-share-last').addEventListener('click', async () => 
     if (result === 'shared-no-file') {
       alert(`O menu de compartilhamento abriu, mas este navegador não permitiu anexar o arquivo diretamente. O arquivo "${f.filename}" continua salvo na pasta do relatório — anexe-o manualmente pelo app escolhido.`);
     } else if (result === 'downloaded') {
-      alert(`Este dispositivo/navegador não abriu o menu de compartilhamento direto. O arquivo "${f.filename}" foi baixado — abra a pasta Downloads (ou o gerenciador de arquivos) e toque em "Compartilhar" nele para enviar pelo Telegram, WhatsApp, Google Drive etc.`);
+      alert(`Este dispositivo/navegador não abriu o menu de compartilhamento direto. O arquivo "${f.filename}" foi baixado — abra a pasta Downloads (ou o gerenciador de arquivos) e toque em "Compartilhar" nele para enviar pelo Telegram, WhatsApp, Google Drive etc.${shareUnavailableReason()}`);
     } else if (result === 'failed') {
       alert(`Não foi possível compartilhar nem baixar o arquivo automaticamente. Use o arquivo "${f.filename}" já salvo na pasta do relatório para enviar manualmente.`);
     }
@@ -6158,7 +6405,18 @@ async function exportBackup(reportId) {
 
     hideSpinner();
     statusEl.style.color = 'var(--verde)';
-    statusEl.textContent = `✅ ${zippedRealFolder ? 'Pasta completa do relatório compactada' : 'Backup exportado'} (${(blob.size / (1024*1024)).toFixed(1)}MB)${savedLocal ? ' e salvo junto da pasta do relatório.' : '.'} Use "Compartilhar arquivo gerado" para enviar.`;
+    statusEl.textContent = `✅ ${zippedRealFolder ? 'Pasta completa do relatório compactada' : 'Backup exportado'} (${(blob.size / (1024*1024)).toFixed(1)}MB)${savedLocal ? ' e salvo junto da pasta do relatório.' : '.'}`;
+
+    // Já abre o menu de compartilhar (WhatsApp, Telegram, Drive etc.) com o
+    // zip pronto, sem precisar de um segundo toque em "Compartilhar arquivo gerado".
+    const shareResult = await shareBlob(blob, backupFilename, 'application/zip', backupFilename);
+    if (shareResult === 'shared-no-file') {
+      alert(`O menu de compartilhamento abriu, mas este navegador não permitiu anexar o arquivo diretamente. O arquivo "${backupFilename}"${savedLocal ? ' continua salvo na pasta do relatório' : ''} — anexe-o manualmente pelo app escolhido, ou toque em "Compartilhar arquivo gerado" abaixo.`);
+    } else if (shareResult === 'downloaded') {
+      alert(`Este dispositivo/navegador não abriu o menu de compartilhamento direto. O arquivo "${backupFilename}" foi baixado — abra a pasta Downloads (ou o gerenciador de arquivos) e toque em "Compartilhar" nele, ou use o botão "Compartilhar arquivo gerado" abaixo.${shareUnavailableReason()}`);
+    } else if (shareResult === 'failed') {
+      alert(`Não foi possível compartilhar nem baixar o arquivo automaticamente. Toque em "Compartilhar arquivo gerado" abaixo para tentar de novo.`);
+    }
   } catch (e) {
     hideSpinner();
     statusEl.style.color = 'var(--vermelho)';
