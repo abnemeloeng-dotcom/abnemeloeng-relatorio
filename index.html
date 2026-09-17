@@ -1163,6 +1163,18 @@ svg.leaflet-image-layer.leaflet-interactive path {
   </div>
 </div>
 
+<!-- ============ MODAL: arquivo pronto para enviar ============ -->
+<div class="modal-overlay" id="modal-share-ready">
+  <div class="modal-box">
+    <button class="modal-close-x" id="modal-share-ready-close">✕</button>
+    <h3>✅ Arquivo pronto!</h3>
+    <p class="hint" id="share-ready-text" style="margin-top:4px;"></p>
+    <div class="row-actions" style="margin-top:14px; flex-direction:column; align-items:stretch;">
+      <button class="btn green full" id="modal-share-ready-send" style="padding:16px; font-size:1.02rem;">📤 Enviar agora</button>
+    </div>
+  </div>
+</div>
+
 <!-- ============ MODAL: novo poste ============ -->
 <div class="modal-overlay" id="modal-new-pole">
   <div class="modal-box">
@@ -6073,20 +6085,6 @@ function setLastGeneratedFile(blob, filename, mimeType) {
   const row = document.getElementById('share-row');
   if (row) row.style.display = '';
 }
-// Depois que a tentativa automática de compartilhar falha (o Android exige
-// um toque direto e recente pra abrir o menu — ver shareUnavailableReason),
-// chama a atenção pro botão manual, que sempre funciona porque É o toque
-// direto que o Android está esperando.
-function highlightShareButton() {
-  const row = document.getElementById('share-row');
-  const btn = document.getElementById('btn-share-last');
-  if (!row || !btn) return;
-  row.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  btn.classList.remove('btn-pulse');
-  void btn.offsetWidth; // reinicia a animação se já tiver rodado antes
-  btn.classList.add('btn-pulse');
-  setTimeout(() => btn.classList.remove('btn-pulse'), 5000);
-}
 // Explica O MOTIVO real de o menu de compartilhar não ter aberto direto,
 // quando dá pra saber: páginas abertas como arquivo local — via gerenciador
 // de arquivos (content://) ou direto do cartão de memória (file://) — não
@@ -6101,16 +6099,40 @@ function shareUnavailableReason() {
   }
   return '';
 }
-// Explica por que a ABERTURA AUTOMÁTICA do menu de compartilhar (logo após
-// compactar o zip) costuma falhar mesmo em https://: o Android só abre esse
-// menu quando o pedido acontece bem no instante de um toque do usuário. Como
-// compactar as fotos leva alguns segundos, quando o app tenta abrir sozinho
-// esse "instante" já passou e o Android bloqueia — não é erro do app. Já o
-// botão manual abaixo abre certo, porque É o toque que o Android está
-// esperando.
-function autoShareUnavailableReason() {
-  return ' O Android só abre esse menu no instante de um toque — como compactar o arquivo leva alguns segundos, quando o app tenta abrir sozinho o menu já não vale mais. Toque agora no botão "Compartilhar arquivo gerado" que ficou destacado abaixo: esse toque direto deve abrir o menu certinho.' + shareUnavailableReason();
+
+// Em vez de tentar abrir o menu de compartilhar sozinho (o Android bloqueia
+// isso porque não é mais o "instante" de um toque, depois de alguns segundos
+// compactando o arquivo), mostramos uma telinha simples com UM botão grande.
+// O toque nesse botão É o toque direto que o Android exige, então funciona
+// de forma confiável — sem depender do usuário entender por quê.
+function openShareReadyModal(blob, filename, mimeType) {
+  document.getElementById('share-ready-text').textContent =
+    `O arquivo "${filename}" está pronto. Toque no botão abaixo para enviar pelo WhatsApp, Telegram ou onde preferir.`;
+  const sendBtn = document.getElementById('modal-share-ready-send');
+  const originalLabel = '📤 Enviar agora';
+  sendBtn.textContent = originalLabel;
+  sendBtn.disabled = false;
+  sendBtn.onclick = async () => {
+    sendBtn.disabled = true;
+    sendBtn.textContent = '📤 Abrindo...';
+    const result = await shareBlob(blob, filename, mimeType, filename);
+    sendBtn.disabled = false;
+    sendBtn.textContent = originalLabel;
+    if (result === 'shared' || result === 'shared-no-file') {
+      document.getElementById('modal-share-ready').classList.remove('show');
+    } else if (result === 'downloaded') {
+      alert(`Este aparelho baixou o arquivo em vez de abrir o menu de enviar. Ele está salvo na pasta Downloads — procure por "${filename}" lá e toque em "Compartilhar" nele.${shareUnavailableReason()}`);
+    } else if (result === 'failed') {
+      alert('Não consegui enviar nem baixar o arquivo automaticamente. Tente de novo em alguns instantes.');
+    }
+    // 'cancelled': o usuário fechou o menu de compartilhar por conta própria —
+    // não precisa de aviso nenhum, o modal continua aberto caso queira tentar de novo.
+  };
+  document.getElementById('modal-share-ready').classList.add('show');
 }
+document.getElementById('modal-share-ready-close').addEventListener('click', () => {
+  document.getElementById('modal-share-ready').classList.remove('show');
+});
 function forceDownload(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -6437,19 +6459,10 @@ async function exportBackup(reportId) {
     statusEl.style.color = 'var(--verde)';
     statusEl.textContent = `✅ ${zippedRealFolder ? 'Pasta completa do relatório compactada' : 'Backup exportado'} (${(blob.size / (1024*1024)).toFixed(1)}MB)${savedLocal ? ' e salvo junto da pasta do relatório.' : '.'}`;
 
-    // Já abre o menu de compartilhar (WhatsApp, Telegram, Drive etc.) com o
-    // zip pronto, sem precisar de um segundo toque em "Compartilhar arquivo gerado".
-    const shareResult = await shareBlob(blob, backupFilename, 'application/zip', backupFilename);
-    if (shareResult === 'shared-no-file') {
-      alert(`O menu de compartilhamento abriu, mas este navegador não permitiu anexar o arquivo diretamente. O arquivo "${backupFilename}"${savedLocal ? ' continua salvo na pasta do relatório' : ''} — anexe-o manualmente pelo app escolhido, ou toque em "Compartilhar arquivo gerado" abaixo.`);
-      highlightShareButton();
-    } else if (shareResult === 'downloaded') {
-      alert(`O arquivo "${backupFilename}" foi baixado em vez de abrir o menu de compartilhar direto.${autoShareUnavailableReason()}`);
-      highlightShareButton();
-    } else if (shareResult === 'failed') {
-      alert(`Não foi possível compartilhar nem baixar o arquivo automaticamente. Toque em "Compartilhar arquivo gerado" abaixo para tentar de novo.`);
-      highlightShareButton();
-    }
+    // Mostra a telinha "Arquivo pronto! Enviar agora" — o toque no botão
+    // dela é o toque direto que o Android exige pra abrir o menu de
+    // compartilhar, então funciona de forma confiável.
+    openShareReadyModal(blob, backupFilename, 'application/zip');
   } catch (e) {
     hideSpinner();
     statusEl.style.color = 'var(--vermelho)';
