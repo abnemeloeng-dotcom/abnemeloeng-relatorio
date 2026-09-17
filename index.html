@@ -925,6 +925,12 @@ svg.leaflet-image-layer.leaflet-interactive path {
   @keyframes spin { to { transform: rotate(360deg); } }
   .spinner-text { font-size: 0.88rem; color: var(--texto-suave); text-align: center; padding: 0 20px; }
 
+  @keyframes pulseAttention {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(198, 160, 74, 0.55); }
+    50% { box-shadow: 0 0 0 10px rgba(198, 160, 74, 0); }
+  }
+  .btn-pulse { animation: pulseAttention 1.1s ease-out 4; border-color: var(--dourado) !important; }
+
   .geo-fallback-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
   .geo-fallback-row input { flex: 1; min-width: 130px; }
 
@@ -6067,6 +6073,20 @@ function setLastGeneratedFile(blob, filename, mimeType) {
   const row = document.getElementById('share-row');
   if (row) row.style.display = '';
 }
+// Depois que a tentativa automática de compartilhar falha (o Android exige
+// um toque direto e recente pra abrir o menu — ver shareUnavailableReason),
+// chama a atenção pro botão manual, que sempre funciona porque É o toque
+// direto que o Android está esperando.
+function highlightShareButton() {
+  const row = document.getElementById('share-row');
+  const btn = document.getElementById('btn-share-last');
+  if (!row || !btn) return;
+  row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  btn.classList.remove('btn-pulse');
+  void btn.offsetWidth; // reinicia a animação se já tiver rodado antes
+  btn.classList.add('btn-pulse');
+  setTimeout(() => btn.classList.remove('btn-pulse'), 5000);
+}
 // Explica O MOTIVO real de o menu de compartilhar não ter aberto direto,
 // quando dá pra saber: páginas abertas como arquivo local — via gerenciador
 // de arquivos (content://) ou direto do cartão de memória (file://) — não
@@ -6080,6 +6100,16 @@ function shareUnavailableReason() {
     return ' Isso costuma acontecer quando o relatório é aberto direto de um arquivo local (pelo gerenciador de arquivos ou pelo Bluetooth, por exemplo) em vez de abrir pelo link https:// do relatório. Abrindo pelo link (o mesmo endereço que começa com https://, salvo nos favoritos ou na tela inicial do celular), o menu de compartilhar deve abrir direto.';
   }
   return '';
+}
+// Explica por que a ABERTURA AUTOMÁTICA do menu de compartilhar (logo após
+// compactar o zip) costuma falhar mesmo em https://: o Android só abre esse
+// menu quando o pedido acontece bem no instante de um toque do usuário. Como
+// compactar as fotos leva alguns segundos, quando o app tenta abrir sozinho
+// esse "instante" já passou e o Android bloqueia — não é erro do app. Já o
+// botão manual abaixo abre certo, porque É o toque que o Android está
+// esperando.
+function autoShareUnavailableReason() {
+  return ' O Android só abre esse menu no instante de um toque — como compactar o arquivo leva alguns segundos, quando o app tenta abrir sozinho o menu já não vale mais. Toque agora no botão "Compartilhar arquivo gerado" que ficou destacado abaixo: esse toque direto deve abrir o menu certinho.' + shareUnavailableReason();
 }
 function forceDownload(blob, filename) {
   const url = URL.createObjectURL(blob);
@@ -6412,10 +6442,13 @@ async function exportBackup(reportId) {
     const shareResult = await shareBlob(blob, backupFilename, 'application/zip', backupFilename);
     if (shareResult === 'shared-no-file') {
       alert(`O menu de compartilhamento abriu, mas este navegador não permitiu anexar o arquivo diretamente. O arquivo "${backupFilename}"${savedLocal ? ' continua salvo na pasta do relatório' : ''} — anexe-o manualmente pelo app escolhido, ou toque em "Compartilhar arquivo gerado" abaixo.`);
+      highlightShareButton();
     } else if (shareResult === 'downloaded') {
-      alert(`Este dispositivo/navegador não abriu o menu de compartilhamento direto. O arquivo "${backupFilename}" foi baixado — abra a pasta Downloads (ou o gerenciador de arquivos) e toque em "Compartilhar" nele, ou use o botão "Compartilhar arquivo gerado" abaixo.${shareUnavailableReason()}`);
+      alert(`O arquivo "${backupFilename}" foi baixado em vez de abrir o menu de compartilhar direto.${autoShareUnavailableReason()}`);
+      highlightShareButton();
     } else if (shareResult === 'failed') {
       alert(`Não foi possível compartilhar nem baixar o arquivo automaticamente. Toque em "Compartilhar arquivo gerado" abaixo para tentar de novo.`);
+      highlightShareButton();
     }
   } catch (e) {
     hideSpinner();
