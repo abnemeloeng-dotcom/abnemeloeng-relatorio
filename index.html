@@ -6100,14 +6100,27 @@ function shareUnavailableReason() {
   return '';
 }
 
+// Detecta (por aproximação — não é 100% confiável) se a página parece estar
+// aberta dentro do navegador embutido de outro app (Telegram, WhatsApp,
+// Instagram, Facebook etc.) em vez do Chrome/navegador padrão do celular.
+// Esses navegadores embutidos costumam não suportar compartilhamento de
+// arquivos mesmo com um toque direto do usuário.
+function isLikelyInAppBrowser() {
+  const ua = navigator.userAgent || '';
+  return /Instagram|FBAN|FBAV|FB_IAB|Line\/|MicroMessenger|TikTok|Snapchat|Pinterest|; ?wv\)/i.test(ua);
+}
+
 // Em vez de tentar abrir o menu de compartilhar sozinho (o Android bloqueia
 // isso porque não é mais o "instante" de um toque, depois de alguns segundos
 // compactando o arquivo), mostramos uma telinha simples com UM botão grande.
 // O toque nesse botão É o toque direto que o Android exige, então funciona
 // de forma confiável — sem depender do usuário entender por quê.
 function openShareReadyModal(blob, filename, mimeType) {
+  const inAppWarning = isLikelyInAppBrowser()
+    ? ' ⚠️ Este link parece estar aberto dentro de outro app (Telegram, WhatsApp, Instagram...). Esses navegadores embutidos costumam bloquear o envio de arquivos — se o botão abaixo não funcionar, copie o link e abra direto no Chrome.'
+    : '';
   document.getElementById('share-ready-text').textContent =
-    `O arquivo "${filename}" está pronto. Toque no botão abaixo para enviar pelo WhatsApp, Telegram ou onde preferir.`;
+    `O arquivo "${filename}" está pronto. Toque no botão abaixo para enviar pelo WhatsApp, Telegram ou onde preferir.${inAppWarning}`;
   const sendBtn = document.getElementById('modal-share-ready-send');
   const originalLabel = '📤 Enviar agora';
   sendBtn.textContent = originalLabel;
@@ -6121,7 +6134,7 @@ function openShareReadyModal(blob, filename, mimeType) {
     if (result === 'shared' || result === 'shared-no-file') {
       document.getElementById('modal-share-ready').classList.remove('show');
     } else if (result === 'downloaded') {
-      alert(`Este aparelho baixou o arquivo em vez de abrir o menu de enviar. Ele está salvo na pasta Downloads — procure por "${filename}" lá e toque em "Compartilhar" nele.${shareUnavailableReason()}`);
+      alert(`Este aparelho baixou o arquivo em vez de abrir o menu de enviar. Ele está salvo na pasta Downloads — procure por "${filename}" lá e toque em "Compartilhar" nele.${shareUnavailableReason()}${isLikelyInAppBrowser() ? ' Isso costuma acontecer quando o link é aberto de dentro do Telegram/WhatsApp/Instagram — tente abrir o mesmo link direto no Chrome.' : ''}`);
     } else if (result === 'failed') {
       alert('Não consegui enviar nem baixar o arquivo automaticamente. Tente de novo em alguns instantes.');
     }
