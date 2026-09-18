@@ -983,8 +983,8 @@ svg.leaflet-image-layer.leaflet-interactive path {
     <div class="card">
       <button class="btn full gold" id="btn-new-report">➕ Novo relatório</button>
       <button class="btn ghost full" id="btn-select-local-folder">📁 Escolher pasta no disco</button>
-      <button class="btn ghost full" id="btn-settings-main">⚙️ Configurar cabeçalho e logo da empresa</button>
       <button class="btn ghost full" id="btn-gps-diag">🛰️ Testar GPS deste aparelho</button>
+      <button class="btn ghost full" id="btn-evidence-capture">📍 Foto/vídeo avulsa de um local (não entra em nenhum relatório)</button>
       <div class="hint" id="local-folder-status" style="margin-top:8px;">Nenhuma pasta local selecionada. Ao criar um relatório, o sistema poderá pedir uma pasta principal para criar a estrutura automaticamente.</div>
     </div>
     <div class="card">
@@ -1265,6 +1265,56 @@ svg.leaflet-image-layer.leaflet-interactive path {
 
     <div class="row-actions" style="margin-top:12px;">
       <button class="btn green" id="modal-settings-save">💾 Salvar configurações</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ MODAL: evidência avulsa (foto/vídeo de um local, fora de relatório) ============ -->
+<div class="modal-overlay" id="modal-evidence">
+  <div class="modal-box">
+    <button class="modal-close-x" id="evidence-close">✕</button>
+    <h3>📍 Registrar evidência de um local</h3>
+    <div class="hint">Tire uma foto ou grave um vídeo curto com a coordenada e a data/hora gravadas nele — sem que isso vire parte de nenhum relatório. Depois é só baixar ou compartilhar o arquivo direto pelo celular.</div>
+
+    <label class="field-label">Descrição do local (opcional, aparece no carimbo)</label>
+    <input type="text" id="evidence-label" placeholder="Ex: Entrada do canteiro, poste em frente ao nº 45...">
+
+    <div id="evidence-mode-select" style="display:flex; gap:10px; margin:14px 0;">
+      <button class="btn gold" style="flex:1;" id="evidence-mode-photo">📷 Foto</button>
+      <button class="btn gold" style="flex:1;" id="evidence-mode-video">🎥 Vídeo</button>
+    </div>
+
+    <!-- modo foto -->
+    <div id="evidence-photo-area" style="display:none;">
+      <input type="file" accept="image/*" capture="environment" id="evidence-camera-input" style="display:none;">
+      <button class="btn full gold" id="evidence-take-photo">📷 Tirar foto agora</button>
+      <div id="evidence-photo-preview-wrap" style="display:none; margin-top:10px;">
+        <img id="evidence-photo-preview" style="width:100%; border-radius:8px; display:block;">
+        <div class="row-actions" style="margin-top:8px;">
+          <button class="btn green" id="evidence-photo-download">💾 Baixar</button>
+          <button class="btn ghost" id="evidence-photo-share">📤 Compartilhar</button>
+          <button class="btn red" id="evidence-photo-discard">🗑️ Descartar</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- modo vídeo -->
+    <div id="evidence-video-area" style="display:none;">
+      <div class="hint" id="evidence-video-hint">A câmera abaixo já mostra a coordenada e a hora sendo gravadas em tempo real na própria imagem.</div>
+      <video id="evidence-video-live" autoplay playsinline muted style="width:100%; border-radius:8px; background:#000;"></video>
+      <canvas id="evidence-video-canvas" style="display:none;"></canvas>
+      <div class="row-actions" style="margin-top:8px;">
+        <button class="btn full gold" id="evidence-video-start">⏺️ Iniciar gravação</button>
+        <button class="btn full red" id="evidence-video-stop" style="display:none;">⏹️ Parar gravação</button>
+      </div>
+      <div id="evidence-video-preview-wrap" style="display:none; margin-top:10px;">
+        <video id="evidence-video-preview" controls playsinline style="width:100%; border-radius:8px;"></video>
+        <div class="row-actions" style="margin-top:8px;">
+          <button class="btn green" id="evidence-video-download">💾 Baixar</button>
+          <button class="btn ghost" id="evidence-video-share">📤 Compartilhar</button>
+          <button class="btn red" id="evidence-video-discard">🗑️ Descartar</button>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -4456,7 +4506,6 @@ document.getElementById('btn-back').addEventListener('click', () => {
   else if (state.screen === 'report') goToReportsScreen();
 });
 document.getElementById('btn-settings-shortcut').addEventListener('click', () => openSettingsModal());
-document.getElementById('btn-settings-main').addEventListener('click', () => openSettingsModal());
 
 // ============================================================
 // TELA: Lista de relatórios
@@ -6046,6 +6095,241 @@ async function openSettingsModal() {
 document.getElementById('modal-settings-close').addEventListener('click', () => {
   document.getElementById('modal-settings').classList.remove('show');
 });
+
+// ============================================================
+// Evidência avulsa de local (foto/vídeo com coordenada e data/hora
+// gravadas na própria mídia) — NÃO faz parte de nenhum relatório.
+// A foto reaproveita o mesmo carimbo (watermark) usado nas fotos do
+// relatório. O vídeo é gravado ao vivo desenhando a câmera + o texto
+// do carimbo em um <canvas>, e gravando esse canvas com MediaRecorder
+// — assim a informação fica realmente "queimada" nos quadros do vídeo,
+// e não como uma legenda separada que poderia se perder.
+// ============================================================
+const evidenceState = {
+  mediaStream: null,
+  mediaRecorder: null,
+  recordedChunks: [],
+  overlayFrameId: null,
+  recordCoord: null,
+  photoDataUrl: null,
+  videoBlobUrl: null,
+};
+
+function openEvidenceModal() {
+  document.getElementById('evidence-label').value = '';
+  document.getElementById('evidence-photo-area').style.display = 'none';
+  document.getElementById('evidence-video-area').style.display = 'none';
+  document.getElementById('evidence-photo-preview-wrap').style.display = 'none';
+  document.getElementById('evidence-video-preview-wrap').style.display = 'none';
+  document.getElementById('evidence-video-start').style.display = '';
+  document.getElementById('evidence-video-stop').style.display = 'none';
+  evidenceState.photoDataUrl = null;
+  if (evidenceState.videoBlobUrl) { URL.revokeObjectURL(evidenceState.videoBlobUrl); evidenceState.videoBlobUrl = null; }
+  document.getElementById('modal-evidence').classList.add('show');
+}
+function stopEvidenceCamera() {
+  if (evidenceState.overlayFrameId) { cancelAnimationFrame(evidenceState.overlayFrameId); evidenceState.overlayFrameId = null; }
+  if (evidenceState.mediaRecorder && evidenceState.mediaRecorder.state !== 'inactive') {
+    try { evidenceState.mediaRecorder.stop(); } catch (e) { /* ignore */ }
+  }
+  if (evidenceState.mediaStream) {
+    evidenceState.mediaStream.getTracks().forEach(t => t.stop());
+    evidenceState.mediaStream = null;
+  }
+}
+function closeEvidenceModal() {
+  stopEvidenceCamera();
+  document.getElementById('modal-evidence').classList.remove('show');
+}
+document.getElementById('btn-evidence-capture').addEventListener('click', openEvidenceModal);
+document.getElementById('evidence-close').addEventListener('click', closeEvidenceModal);
+
+document.getElementById('evidence-mode-photo').addEventListener('click', () => {
+  stopEvidenceCamera();
+  document.getElementById('evidence-video-area').style.display = 'none';
+  document.getElementById('evidence-photo-area').style.display = '';
+});
+document.getElementById('evidence-mode-video').addEventListener('click', async () => {
+  document.getElementById('evidence-photo-area').style.display = 'none';
+  document.getElementById('evidence-video-area').style.display = '';
+  await startEvidenceCameraPreview();
+});
+
+// ---- foto ----
+document.getElementById('evidence-take-photo').addEventListener('click', () => {
+  const input = document.getElementById('evidence-camera-input');
+  input.value = '';
+  input.click();
+});
+document.getElementById('evidence-camera-input').addEventListener('change', async (ev) => {
+  const file = ev.target.files[0];
+  if (!file) return;
+  showSpinner('Processando foto...');
+  try {
+    const { img, dataUrl: originalDataUrl } = await loadImageFromFile(file);
+    let coord = null;
+    try {
+      coord = await getCurrentPositionSafe();
+    } catch (geoErr) {
+      coord = extractGpsFromDataUrl(originalDataUrl);
+      if (!coord) {
+        showSpinner('Obtendo localização...');
+        coord = await getCoordWithFallback();
+        if (!coord) { hideSpinner(); return; } // usuário cancelou
+      }
+    }
+    const capturedAt = Date.now();
+    const label = document.getElementById('evidence-label').value.trim() || 'Evidência de local';
+    const { workDataUrl } = await processImage(img, coord, capturedAt, label, false);
+    hideSpinner();
+    evidenceState.photoDataUrl = workDataUrl;
+    document.getElementById('evidence-photo-preview').src = workDataUrl;
+    document.getElementById('evidence-photo-preview-wrap').style.display = '';
+  } catch (e) {
+    hideSpinner();
+    alert('Não consegui processar a foto: ' + e.message);
+  }
+});
+document.getElementById('evidence-photo-discard').addEventListener('click', () => {
+  evidenceState.photoDataUrl = null;
+  document.getElementById('evidence-photo-preview-wrap').style.display = 'none';
+});
+document.getElementById('evidence-photo-download').addEventListener('click', () => {
+  if (!evidenceState.photoDataUrl) return;
+  const a = document.createElement('a');
+  a.href = evidenceState.photoDataUrl;
+  a.download = 'evidencia_' + Date.now() + '.jpg';
+  document.body.appendChild(a); a.click(); a.remove();
+});
+document.getElementById('evidence-photo-share').addEventListener('click', async () => {
+  if (!evidenceState.photoDataUrl) return;
+  try {
+    const res = await fetch(evidenceState.photoDataUrl);
+    const blob = await res.blob();
+    const file = new File([blob], 'evidencia.jpg', { type: 'image/jpeg' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: 'Evidência de local' });
+    } else {
+      alert('Este navegador não permite compartilhar arquivo direto por aqui. Toque em "Baixar" e depois compartilhe pela galeria de fotos do celular.');
+    }
+  } catch (e) {
+    if (e && e.name !== 'AbortError') alert('Não consegui compartilhar: ' + e.message);
+  }
+});
+
+// ---- vídeo ----
+async function startEvidenceCameraPreview() {
+  if (evidenceState.mediaStream) return; // já está com a câmera aberta
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: true });
+    evidenceState.mediaStream = stream;
+    const videoEl = document.getElementById('evidence-video-live');
+    videoEl.srcObject = stream;
+  } catch (e) {
+    alert('Não consegui acessar a câmera para vídeo: ' + e.message + '\n\nVerifique se você deu permissão de câmera/microfone para este site nas configurações do navegador.');
+  }
+}
+document.getElementById('evidence-video-start').addEventListener('click', async () => {
+  if (!evidenceState.mediaStream) await startEvidenceCameraPreview();
+  if (!evidenceState.mediaStream) return; // permissão negada
+  const videoEl = document.getElementById('evidence-video-live');
+  const canvas = document.getElementById('evidence-video-canvas');
+  await new Promise((resolve) => {
+    if (videoEl.videoWidth) resolve();
+    else videoEl.onloadedmetadata = () => resolve();
+  });
+  canvas.width = videoEl.videoWidth || 1280;
+  canvas.height = videoEl.videoHeight || 720;
+  const ctx = canvas.getContext('2d');
+
+  showSpinner('Obtendo localização...');
+  try { evidenceState.recordCoord = await getCurrentPositionSafe(); }
+  catch (e) { evidenceState.recordCoord = null; }
+  hideSpinner();
+
+  const drawFrame = () => {
+    ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+    const label = document.getElementById('evidence-label').value.trim() || 'Evidência de local';
+    const now = new Date();
+    const dateStr = now.toLocaleDateString('pt-BR') + ' ' + now.toLocaleTimeString('pt-BR');
+    const coordLine = evidenceState.recordCoord
+      ? (evidenceState.recordCoord.lat.toFixed(6) + ', ' + evidenceState.recordCoord.lng.toFixed(6))
+      : 'sem coordenada';
+    drawWatermark(canvas, [label, coordLine, dateStr]);
+    evidenceState.overlayFrameId = requestAnimationFrame(drawFrame);
+  };
+  drawFrame();
+
+  let canvasStream;
+  try {
+    canvasStream = canvas.captureStream(30);
+  } catch (e) {
+    alert('Este navegador não suporta gravar vídeo com o carimbo desenhado. Tente atualizar o Chrome ou use a opção de Foto.');
+    return;
+  }
+  evidenceState.mediaStream.getAudioTracks().forEach(t => canvasStream.addTrack(t));
+
+  evidenceState.recordedChunks = [];
+  let mimeType = '';
+  if (window.MediaRecorder && MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')) mimeType = 'video/webm;codecs=vp9,opus';
+  else if (window.MediaRecorder && MediaRecorder.isTypeSupported('video/webm')) mimeType = 'video/webm';
+  if (!window.MediaRecorder) {
+    alert('Este navegador não suporta gravação de vídeo (MediaRecorder). Tente atualizar o Chrome.');
+    return;
+  }
+  const recorder = new MediaRecorder(canvasStream, mimeType ? { mimeType } : undefined);
+  recorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) evidenceState.recordedChunks.push(e.data); };
+  recorder.onstop = () => {
+    if (evidenceState.overlayFrameId) { cancelAnimationFrame(evidenceState.overlayFrameId); evidenceState.overlayFrameId = null; }
+    const blob = new Blob(evidenceState.recordedChunks, { type: 'video/webm' });
+    if (evidenceState.videoBlobUrl) URL.revokeObjectURL(evidenceState.videoBlobUrl);
+    evidenceState.videoBlobUrl = URL.createObjectURL(blob);
+    document.getElementById('evidence-video-preview').src = evidenceState.videoBlobUrl;
+    document.getElementById('evidence-video-preview-wrap').style.display = '';
+  };
+  evidenceState.mediaRecorder = recorder;
+  recorder.start();
+  document.getElementById('evidence-video-start').style.display = 'none';
+  document.getElementById('evidence-video-stop').style.display = '';
+});
+document.getElementById('evidence-video-stop').addEventListener('click', () => {
+  if (evidenceState.mediaRecorder && evidenceState.mediaRecorder.state !== 'inactive') {
+    evidenceState.mediaRecorder.stop();
+  }
+  if (evidenceState.mediaStream) {
+    evidenceState.mediaStream.getTracks().forEach(t => t.stop());
+    evidenceState.mediaStream = null;
+  }
+  document.getElementById('evidence-video-start').style.display = '';
+  document.getElementById('evidence-video-stop').style.display = 'none';
+});
+document.getElementById('evidence-video-discard').addEventListener('click', () => {
+  if (evidenceState.videoBlobUrl) { URL.revokeObjectURL(evidenceState.videoBlobUrl); evidenceState.videoBlobUrl = null; }
+  document.getElementById('evidence-video-preview-wrap').style.display = 'none';
+});
+document.getElementById('evidence-video-download').addEventListener('click', () => {
+  if (!evidenceState.videoBlobUrl) return;
+  const a = document.createElement('a');
+  a.href = evidenceState.videoBlobUrl;
+  a.download = 'evidencia_' + Date.now() + '.webm';
+  document.body.appendChild(a); a.click(); a.remove();
+});
+document.getElementById('evidence-video-share').addEventListener('click', async () => {
+  if (!evidenceState.videoBlobUrl) return;
+  try {
+    const res = await fetch(evidenceState.videoBlobUrl);
+    const blob = await res.blob();
+    const file = new File([blob], 'evidencia.webm', { type: 'video/webm' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: 'Evidência de local' });
+    } else {
+      alert('Este navegador não permite compartilhar arquivo direto por aqui. Toque em "Baixar" e depois compartilhe pela galeria do celular.');
+    }
+  } catch (e) {
+    if (e && e.name !== 'AbortError') alert('Não consegui compartilhar: ' + e.message);
+  }
+});
+
 document.getElementById('settings-logo-input').addEventListener('change', async (ev) => {
   const file = ev.target.files[0];
   if (!file) return;
