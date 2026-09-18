@@ -1276,9 +1276,6 @@ svg.leaflet-image-layer.leaflet-interactive path {
     <h3>📍 Registrar evidência de um local</h3>
     <div class="hint">Tire uma foto ou grave um vídeo curto com a coordenada e a data/hora gravadas nele — sem que isso vire parte de nenhum relatório. Depois é só baixar ou compartilhar o arquivo direto pelo celular.</div>
 
-    <label class="field-label">Descrição do local (opcional, aparece no carimbo)</label>
-    <input type="text" id="evidence-label" placeholder="Ex: Entrada do canteiro, poste em frente ao nº 45...">
-
     <div id="evidence-mode-select" style="display:flex; gap:10px; margin:14px 0;">
       <button class="btn gold" style="flex:1;" id="evidence-mode-photo">📷 Foto</button>
       <button class="btn gold" style="flex:1;" id="evidence-mode-video">🎥 Vídeo</button>
@@ -1290,6 +1287,11 @@ svg.leaflet-image-layer.leaflet-interactive path {
       <button class="btn full gold" id="evidence-take-photo">📷 Tirar foto agora</button>
       <div id="evidence-photo-preview-wrap" style="display:none; margin-top:10px;">
         <img id="evidence-photo-preview" style="width:100%; border-radius:8px; display:block;">
+        <label class="field-label" style="margin-top:10px;">Descreva o que essa foto mostra (opcional)</label>
+        <input type="text" id="evidence-photo-desc" placeholder="Ex: Rachadura na base do poste, portão danificado...">
+        <div class="row-actions" style="margin-top:8px;">
+          <button class="btn gold full" id="evidence-photo-apply">✅ Aplicar descrição na foto</button>
+        </div>
         <div class="row-actions" style="margin-top:8px;">
           <button class="btn green" id="evidence-photo-download">💾 Baixar</button>
           <button class="btn ghost" id="evidence-photo-share">📤 Compartilhar</button>
@@ -1300,6 +1302,8 @@ svg.leaflet-image-layer.leaflet-interactive path {
 
     <!-- modo vídeo -->
     <div id="evidence-video-area" style="display:none;">
+      <label class="field-label">Descrição do local (opcional, aparece ao vivo no vídeo)</label>
+      <input type="text" id="evidence-video-label" placeholder="Ex: Entrada do canteiro, poste em frente ao nº 45...">
       <div class="hint" id="evidence-video-hint">A câmera abaixo já mostra a coordenada e a hora sendo gravadas em tempo real na própria imagem.</div>
       <video id="evidence-video-live" autoplay playsinline muted style="width:100%; border-radius:8px; background:#000;"></video>
       <canvas id="evidence-video-canvas" style="display:none;"></canvas>
@@ -6111,12 +6115,88 @@ const evidenceState = {
   recordedChunks: [],
   overlayFrameId: null,
   recordCoord: null,
-  photoDataUrl: null,
+  photoDataUrl: null,      // versão atual (mostrada/baixável) da foto
+  photoRawImg: null,       // <img> original, para poder re-carimbar ao aplicar a descrição
+  photoCoord: null,
+  photoCapturedAt: null,
   videoBlobUrl: null,
+  headerLogoImg: null,     // <img> da logo da empresa (carregada 1x ao abrir o modal)
+  headerCompanyName: '',
 };
 
+// Carrega a logo/nome cadastrados em "⚙️ Cabeçalho" para desenhar, discretamente,
+// no canto da foto avulsa (mesma logo usada nos relatórios).
+async function loadEvidenceHeaderInfo() {
+  evidenceState.headerLogoImg = null;
+  evidenceState.headerCompanyName = '';
+  try {
+    const settings = (await dbGet('settings', 'default')) || {};
+    evidenceState.headerCompanyName = settings.companyName || '';
+    if (settings.logoDataUrl) {
+      evidenceState.headerLogoImg = await new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => resolve(null);
+        img.src = settings.logoDataUrl;
+      });
+    }
+  } catch (e) { console.warn('Não consegui carregar logo/empresa para a evidência:', e); }
+}
+
+// Desenha a logo + nome da empresa discretamente no canto superior direito
+// (tamanho pequeno, levemente transparente) — não atrapalha a visualização
+// da foto em si, só identifica de onde ela veio.
+function drawDiscreteCompanyMark(canvas) {
+  const logoImg = evidenceState.headerLogoImg;
+  const companyName = evidenceState.headerCompanyName;
+  if (!logoImg && !companyName) return;
+  const ctx = canvas.getContext('2d');
+  const pad = Math.max(8, canvas.width * 0.02);
+  ctx.save();
+  ctx.globalAlpha = 0.82;
+  let logoW = 0, logoH = 0;
+  if (logoImg) {
+    const maxW = canvas.width * 0.16, maxH = canvas.height * 0.09;
+    const ratio = Math.min(maxW / logoImg.width, maxH / logoImg.height, 1);
+    logoW = logoImg.width * ratio;
+    logoH = logoImg.height * ratio;
+    ctx.drawImage(logoImg, canvas.width - logoW - pad, pad, logoW, logoH);
+  }
+  if (companyName) {
+    const fontSize = Math.max(10, Math.round(canvas.width * 0.018));
+    ctx.font = fontSize + 'px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'top';
+    const textY = pad + logoH + (logoImg ? 3 : 0);
+    const textW = ctx.measureText(companyName).width;
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(canvas.width - textW - pad - 6, textY - 2, textW + 8, fontSize + 6);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(companyName, canvas.width - pad, textY + 1);
+  }
+  ctx.restore();
+}
+
+// Gera a foto final da evidência: redimensiona, desenha o carimbo de
+// coordenada/data (+ descrição, se já houver) embaixo, e a logo/nome da
+// empresa discretamente no canto superior direito.
+function buildEvidenceStampedPhoto(img, coord, capturedAt, description) {
+  const dateObj = new Date(capturedAt);
+  const dateStr = dateObj.toLocaleDateString('pt-BR') + ' ' + dateObj.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  const coordLine = coord ? `${coord.lat.toFixed(6)}, ${coord.lng.toFixed(6)}${coord.manual ? ' (manual)' : coord.fromExif ? ' (GPS câmera)' : ''}` : 'sem coordenada';
+  const canvas = resizeToCanvas(img, 1600);
+  const lines = ['Evidência de local', coordLine, dateStr];
+  if (description) lines.push(description);
+  drawWatermark(canvas, lines);
+  drawDiscreteCompanyMark(canvas);
+  let dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+  dataUrl = insertGpsExif(dataUrl, coord, dateObj);
+  return dataUrl;
+}
+
 function openEvidenceModal() {
-  document.getElementById('evidence-label').value = '';
+  document.getElementById('evidence-video-label').value = '';
+  document.getElementById('evidence-photo-desc').value = '';
   document.getElementById('evidence-photo-area').style.display = 'none';
   document.getElementById('evidence-video-area').style.display = 'none';
   document.getElementById('evidence-photo-preview-wrap').style.display = 'none';
@@ -6124,8 +6204,10 @@ function openEvidenceModal() {
   document.getElementById('evidence-video-start').style.display = '';
   document.getElementById('evidence-video-stop').style.display = 'none';
   evidenceState.photoDataUrl = null;
+  evidenceState.photoRawImg = null;
   if (evidenceState.videoBlobUrl) { URL.revokeObjectURL(evidenceState.videoBlobUrl); evidenceState.videoBlobUrl = null; }
   document.getElementById('modal-evidence').classList.add('show');
+  loadEvidenceHeaderInfo(); // carrega logo/nome em segundo plano, pronta quando a foto for tirada
 }
 function stopEvidenceCamera() {
   if (evidenceState.overlayFrameId) { cancelAnimationFrame(evidenceState.overlayFrameId); evidenceState.overlayFrameId = null; }
@@ -6179,19 +6261,34 @@ document.getElementById('evidence-camera-input').addEventListener('change', asyn
       }
     }
     const capturedAt = Date.now();
-    const label = document.getElementById('evidence-label').value.trim() || 'Evidência de local';
-    const { workDataUrl } = await processImage(img, coord, capturedAt, label, false);
+    // Garante que a logo/nome já foram carregados antes de carimbar.
+    if (!evidenceState.headerLogoImg && !evidenceState.headerCompanyName) await loadEvidenceHeaderInfo();
+    evidenceState.photoRawImg = img;
+    evidenceState.photoCoord = coord;
+    evidenceState.photoCapturedAt = capturedAt;
+    document.getElementById('evidence-photo-desc').value = '';
+    // Primeira versão: sem descrição ainda — o local pra descrever aparece
+    // logo abaixo da prévia, depois que a foto já foi tirada.
+    const dataUrl = buildEvidenceStampedPhoto(img, coord, capturedAt, '');
+    evidenceState.photoDataUrl = dataUrl;
     hideSpinner();
-    evidenceState.photoDataUrl = workDataUrl;
-    document.getElementById('evidence-photo-preview').src = workDataUrl;
+    document.getElementById('evidence-photo-preview').src = dataUrl;
     document.getElementById('evidence-photo-preview-wrap').style.display = '';
   } catch (e) {
     hideSpinner();
     alert('Não consegui processar a foto: ' + e.message);
   }
 });
+document.getElementById('evidence-photo-apply').addEventListener('click', () => {
+  if (!evidenceState.photoRawImg) return;
+  const description = document.getElementById('evidence-photo-desc').value.trim();
+  const dataUrl = buildEvidenceStampedPhoto(evidenceState.photoRawImg, evidenceState.photoCoord, evidenceState.photoCapturedAt, description);
+  evidenceState.photoDataUrl = dataUrl;
+  document.getElementById('evidence-photo-preview').src = dataUrl;
+});
 document.getElementById('evidence-photo-discard').addEventListener('click', () => {
   evidenceState.photoDataUrl = null;
+  evidenceState.photoRawImg = null;
   document.getElementById('evidence-photo-preview-wrap').style.display = 'none';
 });
 document.getElementById('evidence-photo-download').addEventListener('click', () => {
@@ -6249,7 +6346,7 @@ document.getElementById('evidence-video-start').addEventListener('click', async 
 
   const drawFrame = () => {
     ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
-    const label = document.getElementById('evidence-label').value.trim() || 'Evidência de local';
+    const label = document.getElementById('evidence-video-label').value.trim() || 'Evidência de local';
     const now = new Date();
     const dateStr = now.toLocaleDateString('pt-BR') + ' ' + now.toLocaleTimeString('pt-BR');
     const coordLine = evidenceState.recordCoord
