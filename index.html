@@ -5674,6 +5674,114 @@ function drawWatermark(canvas, lines) {
   });
 }
 
+// ------------------------------------------------------------------
+// Marca d'água de localização "estilo app de GPS": um quadradinho de
+// mapa com um pino no centro + coordenadas/data ao lado, num cartão
+// discreto no canto inferior esquerdo — como no exemplo de vídeo
+// enviado. Usada só na "evidência avulsa" (foto/vídeo de local).
+// ------------------------------------------------------------------
+function latLngParaTileXY(lat, lon, zoom) {
+  const latRad = lat * Math.PI / 180;
+  const n = Math.pow(2, zoom);
+  const x = Math.floor((lon + 180) / 360 * n);
+  const y = Math.floor((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n);
+  return { x, y };
+}
+// Baixa um "quadradinho" de mapa (tile do OpenStreetMap) para aquela
+// coordenada. Se não tiver internet ou o carregamento falhar/demorar
+// demais, resolve com null — o desenho cai num placeholder discreto,
+// sem travar a foto/vídeo por causa disso.
+function baixarTileDeMapa(lat, lon, zoom) {
+  return new Promise((resolve) => {
+    try {
+      const { x, y } = latLngParaTileXY(lat, lon, zoom);
+      const sub = ['a', 'b', 'c'][(x + y) % 3];
+      const url = `https://${sub}.tile.openstreetmap.org/${zoom}/${x}/${y}.png`;
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      let done = false;
+      const timer = setTimeout(() => { if (!done) { done = true; resolve(null); } }, 4000);
+      img.onload = () => { if (!done) { done = true; clearTimeout(timer); resolve(img); } };
+      img.onerror = () => { if (!done) { done = true; clearTimeout(timer); resolve(null); } };
+      img.src = url;
+    } catch (e) { resolve(null); }
+  });
+}
+function drawLocationWatermark(canvas, coord, dateObj, extraLines, mapTileImg) {
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const pad = Math.max(8, W * 0.018);
+  const mapSize = Math.max(56, W * 0.16);
+  const fontSize = Math.max(12, Math.round(W * 0.022));
+  const lineH = fontSize * 1.4;
+
+  const textLines = [];
+  textLines.push(coord ? `${coord.lat.toFixed(6)}, ${coord.lng.toFixed(6)}` : 'Sem coordenada disponível');
+  textLines.push(dateObj.toLocaleDateString('pt-BR') + '  ' + dateObj.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+  (extraLines || []).forEach((l) => { if (l) textLines.push(l); });
+
+  ctx.font = 'bold ' + fontSize + 'px sans-serif';
+  let maxTextW = 0;
+  textLines.forEach((l) => { maxTextW = Math.max(maxTextW, ctx.measureText(l).width); });
+
+  const innerPad = pad * 0.8;
+  const boxH = Math.max(mapSize + innerPad * 2, textLines.length * lineH + innerPad * 2);
+  const boxW = mapSize + innerPad * 3 + maxTextW;
+  const boxX = pad, boxY = H - boxH - pad;
+  const radius = Math.max(6, W * 0.008);
+
+  ctx.save();
+  ctx.globalAlpha = 0.7;
+  ctx.fillStyle = '#000';
+  ctx.beginPath();
+  ctx.moveTo(boxX + radius, boxY);
+  ctx.arcTo(boxX + boxW, boxY, boxX + boxW, boxY + boxH, radius);
+  ctx.arcTo(boxX + boxW, boxY + boxH, boxX, boxY + boxH, radius);
+  ctx.arcTo(boxX, boxY + boxH, boxX, boxY, radius);
+  ctx.arcTo(boxX, boxY, boxX + boxW, boxY, radius);
+  ctx.closePath();
+  ctx.fill();
+  ctx.globalAlpha = 1;
+
+  const mapX = boxX + innerPad, mapY = boxY + (boxH - mapSize) / 2;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(mapX, mapY, mapSize, mapSize);
+  ctx.clip();
+  if (mapTileImg) {
+    ctx.drawImage(mapTileImg, mapX, mapY, mapSize, mapSize);
+  } else {
+    const grad = ctx.createLinearGradient(mapX, mapY, mapX + mapSize, mapY + mapSize);
+    grad.addColorStop(0, '#3a5a40'); grad.addColorStop(1, '#588157');
+    ctx.fillStyle = grad;
+    ctx.fillRect(mapX, mapY, mapSize, mapSize);
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.lineWidth = 1;
+    for (let gx = mapX; gx < mapX + mapSize; gx += mapSize / 4) { ctx.beginPath(); ctx.moveTo(gx, mapY); ctx.lineTo(gx, mapY + mapSize); ctx.stroke(); }
+    for (let gy = mapY; gy < mapY + mapSize; gy += mapSize / 4) { ctx.beginPath(); ctx.moveTo(mapX, gy); ctx.lineTo(mapX + mapSize, gy); ctx.stroke(); }
+  }
+  ctx.restore();
+  ctx.strokeStyle = 'rgba(255,255,255,0.55)'; ctx.lineWidth = Math.max(1, W * 0.0022);
+  ctx.strokeRect(mapX, mapY, mapSize, mapSize);
+
+  const pinX = mapX + mapSize / 2, pinY = mapY + mapSize / 2;
+  ctx.fillStyle = '#ff3b30';
+  ctx.beginPath(); ctx.arc(pinX, pinY - mapSize * 0.08, mapSize * 0.1, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(pinX - mapSize * 0.065, pinY);
+  ctx.lineTo(pinX + mapSize * 0.065, pinY);
+  ctx.lineTo(pinX, pinY + mapSize * 0.15);
+  ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = Math.max(1, W * 0.0015);
+  ctx.beginPath(); ctx.arc(pinX, pinY - mapSize * 0.08, mapSize * 0.1, 0, Math.PI * 2); ctx.stroke();
+
+  const textX = mapX + mapSize + innerPad;
+  let textY = boxY + (boxH - textLines.length * lineH) / 2 + fontSize * 0.9;
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold ' + fontSize + 'px sans-serif';
+  textLines.forEach((l, i) => ctx.fillText(l, textX, textY + i * lineH));
+  ctx.restore();
+}
+
 function formatCoordDMS(deg, isLat) {
   const abs = Math.abs(deg);
   const d = Math.floor(abs);
@@ -6115,6 +6223,7 @@ const evidenceState = {
   recordedChunks: [],
   overlayFrameId: null,
   recordCoord: null,
+  videoMapTileImg: null,   // tile do mapa carregado 1x ao iniciar a gravação (reaproveitado em todos os quadros)
   photoDataUrl: null,      // versão atual (mostrada/baixável) da foto
   photoRawImg: null,       // <img> original, para poder re-carimbar ao aplicar a descrição
   photoCoord: null,
@@ -6177,17 +6286,18 @@ function drawDiscreteCompanyMark(canvas) {
   ctx.restore();
 }
 
-// Gera a foto final da evidência: redimensiona, desenha o carimbo de
-// coordenada/data (+ descrição, se já houver) embaixo, e a logo/nome da
-// empresa discretamente no canto superior direito.
-function buildEvidenceStampedPhoto(img, coord, capturedAt, description) {
+// Gera a foto final da evidência: redimensiona, desenha a marca d'água de
+// localização (mapinha + pino + coordenada/data + descrição) no canto
+// inferior esquerdo, e a logo/nome da empresa discretamente no canto
+// superior direito.
+async function buildEvidenceStampedPhoto(img, coord, capturedAt, description) {
   const dateObj = new Date(capturedAt);
-  const dateStr = dateObj.toLocaleDateString('pt-BR') + ' ' + dateObj.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-  const coordLine = coord ? `${coord.lat.toFixed(6)}, ${coord.lng.toFixed(6)}${coord.manual ? ' (manual)' : coord.fromExif ? ' (GPS câmera)' : ''}` : 'sem coordenada';
   const canvas = resizeToCanvas(img, 1600);
-  const lines = ['Evidência de local', coordLine, dateStr];
-  if (description) lines.push(description);
-  drawWatermark(canvas, lines);
+  let mapTileImg = null;
+  if (coord) {
+    try { mapTileImg = await baixarTileDeMapa(coord.lat, coord.lng, 17); } catch (e) { mapTileImg = null; }
+  }
+  drawLocationWatermark(canvas, coord, dateObj, description ? [description] : [], mapTileImg);
   drawDiscreteCompanyMark(canvas);
   let dataUrl = canvas.toDataURL('image/jpeg', 0.9);
   dataUrl = insertGpsExif(dataUrl, coord, dateObj);
@@ -6269,7 +6379,8 @@ document.getElementById('evidence-camera-input').addEventListener('change', asyn
     document.getElementById('evidence-photo-desc').value = '';
     // Primeira versão: sem descrição ainda — o local pra descrever aparece
     // logo abaixo da prévia, depois que a foto já foi tirada.
-    const dataUrl = buildEvidenceStampedPhoto(img, coord, capturedAt, '');
+    showSpinner('Carregando mapa da localização...');
+    const dataUrl = await buildEvidenceStampedPhoto(img, coord, capturedAt, '');
     evidenceState.photoDataUrl = dataUrl;
     hideSpinner();
     document.getElementById('evidence-photo-preview').src = dataUrl;
@@ -6279,10 +6390,12 @@ document.getElementById('evidence-camera-input').addEventListener('change', asyn
     alert('Não consegui processar a foto: ' + e.message);
   }
 });
-document.getElementById('evidence-photo-apply').addEventListener('click', () => {
+document.getElementById('evidence-photo-apply').addEventListener('click', async () => {
   if (!evidenceState.photoRawImg) return;
   const description = document.getElementById('evidence-photo-desc').value.trim();
-  const dataUrl = buildEvidenceStampedPhoto(evidenceState.photoRawImg, evidenceState.photoCoord, evidenceState.photoCapturedAt, description);
+  showSpinner('Atualizando foto...');
+  const dataUrl = await buildEvidenceStampedPhoto(evidenceState.photoRawImg, evidenceState.photoCoord, evidenceState.photoCapturedAt, description);
+  hideSpinner();
   evidenceState.photoDataUrl = dataUrl;
   document.getElementById('evidence-photo-preview').src = dataUrl;
 });
@@ -6342,17 +6455,25 @@ document.getElementById('evidence-video-start').addEventListener('click', async 
   showSpinner('Obtendo localização...');
   try { evidenceState.recordCoord = await getCurrentPositionSafe(); }
   catch (e) { evidenceState.recordCoord = null; }
+
+  // Busca o mapinha e carrega a logo/empresa ANTES de começar a gravar —
+  // uma vez só, e reaproveitado em todos os quadros do vídeo (evita
+  // refazer isso 30x por segundo).
+  evidenceState.videoMapTileImg = null;
+  if (evidenceState.recordCoord) {
+    showSpinner('Carregando mapa da localização...');
+    try { evidenceState.videoMapTileImg = await baixarTileDeMapa(evidenceState.recordCoord.lat, evidenceState.recordCoord.lng, 17); }
+    catch (e) { evidenceState.videoMapTileImg = null; }
+  }
+  if (!evidenceState.headerLogoImg && !evidenceState.headerCompanyName) await loadEvidenceHeaderInfo();
   hideSpinner();
 
   const drawFrame = () => {
     ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
     const label = document.getElementById('evidence-video-label').value.trim() || 'Evidência de local';
     const now = new Date();
-    const dateStr = now.toLocaleDateString('pt-BR') + ' ' + now.toLocaleTimeString('pt-BR');
-    const coordLine = evidenceState.recordCoord
-      ? (evidenceState.recordCoord.lat.toFixed(6) + ', ' + evidenceState.recordCoord.lng.toFixed(6))
-      : 'sem coordenada';
-    drawWatermark(canvas, [label, coordLine, dateStr]);
+    drawLocationWatermark(canvas, evidenceState.recordCoord, now, [label], evidenceState.videoMapTileImg);
+    drawDiscreteCompanyMark(canvas);
     evidenceState.overlayFrameId = requestAnimationFrame(drawFrame);
   };
   drawFrame();
