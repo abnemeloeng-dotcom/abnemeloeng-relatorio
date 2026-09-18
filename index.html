@@ -1082,6 +1082,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
       <canvas id="annotateCanvas"></canvas>
     </div>
     <div class="annotate-toolbar">
+      <button class="annotate-tool" data-tool="move" title="Mover uma anotação já feita — toque nela e arraste">✋</button>
       <button class="annotate-tool" data-tool="arrow" title="Seta">➡️</button>
       <button class="annotate-tool" data-tool="circle" title="Círculo">⭕</button>
       <button class="annotate-tool" data-tool="rect" title="Retângulo">▭</button>
@@ -1093,6 +1094,14 @@ svg.leaflet-image-layer.leaflet-interactive path {
       <button class="annotate-tool" id="annotate-clear" title="Limpar tudo">🗑️</button>
     </div>
     <div class="annotate-colors" id="annotate-colors"></div>
+    <div class="annotate-size-controls" style="display:flex; gap:14px; padding:6px 10px 10px; background:#1c1c1c; align-items:center; flex-wrap:wrap;">
+      <label style="color:#ddd;font-size:0.72rem;display:flex;align-items:center;gap:6px;">✏️ Espessura
+        <input type="range" id="annotate-thickness" min="1" max="12" step="1" value="4" style="width:100px;">
+      </label>
+      <label style="color:#ddd;font-size:0.72rem;display:flex;align-items:center;gap:6px;">🔤 Tam. texto
+        <input type="range" id="annotate-fontsize" min="14" max="72" step="2" value="28" style="width:100px;">
+      </label>
+    </div>
     <div class="annotate-actions">
       <button class="btn ghost" id="annotate-cancel">Cancelar</button>
       <button class="btn green" id="annotate-save">💾 Salvar anotações</button>
@@ -4894,11 +4903,14 @@ const annotateState = {
   calibration: null, // { pixelLen, cm } — referência de escala nesta foto
   tool: 'arrow',
   color: '#ff3b30',
+  thickness: 4, // espessura escolhida no controle deslizante (usada nas próximas formas desenhadas)
+  fontSize: 28, // tamanho de texto escolhido no controle deslizante (idem)
   img: null,
   canvas: null,
   ctx: null,
   drawing: false,
   current: null, // shape em andamento (preview)
+  dragging: null, // { shape, orig } — anotação sendo arrastada com a ferramenta "mover"
 };
 const ANNOTATE_COLORS = ['#ff3b30', '#ffcc00', '#34c759', '#0a84ff', '#ffffff', '#111111'];
 
@@ -4951,6 +4963,12 @@ function annotateSetupColors() {
     wrap.appendChild(b);
   });
 }
+document.getElementById('annotate-thickness').addEventListener('input', (ev) => {
+  annotateState.thickness = parseFloat(ev.target.value);
+});
+document.getElementById('annotate-fontsize').addEventListener('input', (ev) => {
+  annotateState.fontSize = parseFloat(ev.target.value);
+});
 document.querySelectorAll('.annotate-tool[data-tool]').forEach(btn => {
   btn.addEventListener('click', () => {
     annotateState.tool = btn.dataset.tool;
@@ -4972,6 +4990,8 @@ async function openAnnotateEditor(photoId) {
   document.querySelectorAll('.annotate-tool[data-tool]').forEach(b => b.classList.toggle('active', b.dataset.tool === 'arrow'));
   annotateSetupColors();
   annotateAtualizarInfoEscala();
+  document.getElementById('annotate-thickness').value = annotateState.thickness;
+  document.getElementById('annotate-fontsize').value = annotateState.fontSize;
 
   const img = new Image();
   img.onload = () => {
@@ -4997,7 +5017,12 @@ function annotateCanvasPoint(ev) {
 
 function annotateDrawShape(ctx, s, scale) {
   ctx.strokeStyle = s.color; ctx.fillStyle = s.color;
-  ctx.lineWidth = Math.max(2, scale * 0.5);
+  // Espessura: cada forma guarda a espessura escolhida no momento em que foi
+  // desenhada (controle deslizante "✏️ Espessura"); formas antigas sem esse
+  // campo caem no valor padrão 4, mantendo compatibilidade com anotações
+  // feitas antes dessa opção existir.
+  const thickness = s.thickness || 4;
+  ctx.lineWidth = Math.max(1, scale * 0.5 * (thickness / 4));
   ctx.lineCap = 'round'; ctx.lineJoin = 'round';
   if (s.type === 'pen') {
     if (!s.points || s.points.length < 2) return;
@@ -5014,10 +5039,10 @@ function annotateDrawShape(ctx, s, scale) {
     ctx.ellipse(cx0, cy0, rx || 1, ry || 1, 0, 0, Math.PI * 2);
     ctx.stroke();
   } else if (s.type === 'arrow' || s.type === 'measure') {
-    annotateDrawArrowLine(ctx, s.x1, s.y1, s.x2, s.y2, scale, s.type === 'measure');
+    annotateDrawArrowLine(ctx, s.x1, s.y1, s.x2, s.y2, scale, s.type === 'measure', thickness);
     if (s.type === 'measure' && s.label) {
       const midX = (s.x1 + s.x2) / 2, midY = (s.y1 + s.y2) / 2;
-      const fontSize = Math.max(16, scale * 4);
+      const fontSize = (s.fontSize || 28) * scale;
       ctx.font = 'bold ' + fontSize + 'px sans-serif';
       const w = ctx.measureText(s.label).width;
       ctx.fillStyle = 'rgba(0,0,0,0.65)';
@@ -5029,10 +5054,10 @@ function annotateDrawShape(ctx, s, scale) {
   } else if (s.type === 'scale') {
     ctx.save();
     ctx.setLineDash([Math.max(6, scale * 1.5), Math.max(4, scale)]);
-    annotateDrawArrowLine(ctx, s.x1, s.y1, s.x2, s.y2, scale, true);
+    annotateDrawArrowLine(ctx, s.x1, s.y1, s.x2, s.y2, scale, true, thickness);
     ctx.restore();
     const midX = (s.x1 + s.x2) / 2, midY = (s.y1 + s.y2) / 2;
-    const fontSize = Math.max(15, scale * 3.6);
+    const fontSize = (s.fontSize || 28) * scale * 0.85;
     const label = 'Referência: ' + cmParaTexto(s.cm);
     ctx.font = 'bold ' + fontSize + 'px sans-serif';
     const w = ctx.measureText(label).width;
@@ -5042,7 +5067,7 @@ function annotateDrawShape(ctx, s, scale) {
     ctx.fillText(label, midX - w / 2, midY - 8);
     ctx.fillStyle = s.color;
   } else if (s.type === 'text') {
-    const fontSize = Math.max(16, scale * 4.5);
+    const fontSize = (s.fontSize || 28) * scale;
     ctx.font = 'bold ' + fontSize + 'px sans-serif';
     const w = ctx.measureText(s.text).width;
     ctx.fillStyle = 'rgba(0,0,0,0.55)';
@@ -5051,9 +5076,12 @@ function annotateDrawShape(ctx, s, scale) {
     ctx.fillText(s.text, s.x, s.y - 2);
   }
 }
-function annotateDrawArrowLine(ctx, x1, y1, x2, y2, scale, doubleHead) {
+function annotateDrawArrowLine(ctx, x1, y1, x2, y2, scale, doubleHead, thickness) {
   ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
-  const headLen = Math.max(14, scale * 3);
+  // Ponta da seta proporcional à espessura escolhida, para não ficar
+  // "fininha" mesmo quando a linha está grossa.
+  const t = thickness || 4;
+  const headLen = Math.max(10, scale * 2.2 * (t / 4) + t * 2);
   const ang = Math.atan2(y2 - y1, x2 - x1);
   const drawHead = (x, y, angle) => {
     ctx.beginPath();
@@ -5065,6 +5093,53 @@ function annotateDrawArrowLine(ctx, x1, y1, x2, y2, scale, doubleHead) {
   };
   drawHead(x2, y2, ang);
   if (doubleHead) drawHead(x1, y1, ang + Math.PI);
+}
+// ---- hit-test e translação para a ferramenta "mover" (✋) ----
+// Calcula um retângulo delimitador (com uma margem extra de toque) para
+// cada tipo de forma, para saber se o dedo/clique caiu "em cima" dela.
+function annotateShapeBBox(s, scale) {
+  const pad = Math.max(18, scale * 10); // margem extra de toque, formas finas são difíceis de acertar exatamente
+  if (s.type === 'pen') {
+    if (!s.points || !s.points.length) return null;
+    let minX = s.points[0].x, maxX = s.points[0].x, minY = s.points[0].y, maxY = s.points[0].y;
+    s.points.forEach(p => { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); });
+    return { minX: minX - pad, minY: minY - pad, maxX: maxX + pad, maxY: maxY + pad };
+  }
+  if (s.type === 'text') {
+    const fontSize = (s.fontSize || 28) * scale;
+    const approxW = (s.text ? s.text.length : 1) * fontSize * 0.6;
+    return { minX: s.x - pad, minY: s.y - fontSize - pad, maxX: s.x + approxW + pad, maxY: s.y + pad };
+  }
+  // arrow, measure, scale, rect, circle: todas têm x1,y1,x2,y2
+  return {
+    minX: Math.min(s.x1, s.x2) - pad,
+    minY: Math.min(s.y1, s.y2) - pad,
+    maxX: Math.max(s.x1, s.x2) + pad,
+    maxY: Math.max(s.y1, s.y2) + pad,
+  };
+}
+// Procura a anotação mais "de cima" (desenhada por último) que contém o
+// ponto tocado, para começar a arrastá-la.
+function annotateHitTest(x, y, scale) {
+  const shapes = annotateState.shapes;
+  for (let i = shapes.length - 1; i >= 0; i--) {
+    const box = annotateShapeBBox(shapes[i], scale);
+    if (box && x >= box.minX && x <= box.maxX && y >= box.minY && y <= box.maxY) return shapes[i];
+  }
+  return null;
+}
+// Move a forma inteira por (dx, dy) a partir de uma cópia "orig" tirada no
+// início do arrasto (evita acumular erro de arredondamento a cada frame).
+function annotateTranslateShape(shape, orig, dx, dy) {
+  if (shape.type === 'pen') {
+    shape.points = orig.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
+  } else if (shape.type === 'text') {
+    shape.x = orig.x + dx;
+    shape.y = orig.y + dy;
+  } else {
+    shape.x1 = orig.x1 + dx; shape.y1 = orig.y1 + dy;
+    shape.x2 = orig.x2 + dx; shape.y2 = orig.y2 + dy;
+  }
 }
 function annotateRedraw() {
   const { ctx, canvas, img, shapes, current } = annotateState;
@@ -5083,22 +5158,38 @@ function annotateRedraw() {
     ev.preventDefault();
     const p = annotateCanvasPoint(ev);
     const tool = annotateState.tool;
+    const scale = annotateState.canvas.width / 800;
+    if (tool === 'move') {
+      const hit = annotateHitTest(p.x, p.y, scale);
+      if (hit) {
+        annotateState.dragging = { shape: hit, orig: JSON.parse(JSON.stringify(hit)), startX: p.x, startY: p.y };
+      }
+      return;
+    }
     if (tool === 'text') {
       const text = prompt('Digite o texto da anotação:');
       if (text && text.trim()) {
-        annotateState.shapes.push({ type: 'text', x: p.x, y: p.y, text: text.trim(), color: annotateState.color });
+        annotateState.shapes.push({ type: 'text', x: p.x, y: p.y, text: text.trim(), color: annotateState.color, fontSize: annotateState.fontSize });
         annotateRedraw();
       }
       return;
     }
     annotateState.drawing = true;
     if (tool === 'pen') {
-      annotateState.current = { type: 'pen', points: [p], color: annotateState.color };
+      annotateState.current = { type: 'pen', points: [p], color: annotateState.color, thickness: annotateState.thickness };
     } else {
-      annotateState.current = { type: tool, x1: p.x, y1: p.y, x2: p.x, y2: p.y, color: annotateState.color };
+      annotateState.current = { type: tool, x1: p.x, y1: p.y, x2: p.x, y2: p.y, color: annotateState.color, thickness: annotateState.thickness, fontSize: annotateState.fontSize };
     }
   };
   const move = (ev) => {
+    if (annotateState.dragging) {
+      ev.preventDefault();
+      const p = annotateCanvasPoint(ev);
+      const d = annotateState.dragging;
+      annotateTranslateShape(d.shape, d.orig, p.x - d.startX, p.y - d.startY);
+      annotateRedraw();
+      return;
+    }
     if (!annotateState.drawing) return;
     ev.preventDefault();
     const p = annotateCanvasPoint(ev);
@@ -5108,6 +5199,10 @@ function annotateRedraw() {
     annotateRedraw();
   };
   const end = (ev) => {
+    if (annotateState.dragging) {
+      annotateState.dragging = null;
+      return;
+    }
     if (!annotateState.drawing) return;
     annotateState.drawing = false;
     const cur = annotateState.current;
