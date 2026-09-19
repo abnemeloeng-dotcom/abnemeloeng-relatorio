@@ -3,7 +3,16 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>Relatório Fotográfico de Campo</title>
+<title>Fotoprova — Relatório Fotográfico de Campo</title>
+<meta name="description" content="Substitui câmera + KMZ + montagem manual do relatório fotográfico de campo.">
+<meta name="theme-color" content="#1a3a5c">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Fotoprova">
 <style>
 /* required styles */
 
@@ -970,7 +979,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
 <header>
   <button class="back-btn" id="btn-back">←</button>
   <div class="title-wrap">
-    <h1 id="header-title">📷 Relatório Fotográfico</h1>
+    <h1 id="header-title">📷 Fotoprova</h1>
     <div class="subtitle" id="header-subtitle">Substitui câmera + KMZ + montagem manual do relatório</div>
   </div>
   <button class="btn ghost" id="btn-settings-shortcut" title="Configurações do cabeçalho" style="margin:0; min-height:38px; padding:8px 10px; white-space:nowrap;">⚙️ Cabeçalho</button>
@@ -978,8 +987,44 @@ svg.leaflet-image-layer.leaflet-interactive path {
 
 <div class="container">
 
+  <!-- ============ CAMADA DE LOGIN (bloqueia o app até entrar) ============ -->
+  <div id="auth-gate" style="display:none; position:fixed; inset:0; z-index:9999; background:#0b2340; color:#fff; overflow-y:auto;">
+    <div style="max-width:420px; margin:0 auto; padding:40px 20px;">
+      <div style="text-align:center; margin-bottom:24px;">
+        <div style="font-size:2.4rem;">📷</div>
+        <h1 style="margin:6px 0 2px;">Fotoprova</h1>
+        <div style="opacity:0.75; font-size:0.9rem;">Relatório fotográfico de campo</div>
+      </div>
+      <div id="auth-tabs" style="display:flex; gap:8px; margin-bottom:16px;">
+        <button class="btn ghost" id="auth-tab-login" style="flex:1; color:#fff; border-color:#4a6fa5;">Entrar</button>
+        <button class="btn ghost" id="auth-tab-signup" style="flex:1; color:#fff; border-color:#4a6fa5;">Criar conta</button>
+      </div>
+      <label class="field-label" style="color:#dce6f5;">E-mail</label>
+      <input type="email" id="auth-email" placeholder="seuemail@exemplo.com" autocomplete="email">
+      <label class="field-label" style="color:#dce6f5;">Senha</label>
+      <input type="password" id="auth-password" placeholder="Mínimo 6 caracteres" autocomplete="current-password">
+      <div id="auth-error" style="color:#ffb3b3; font-size:0.85rem; margin-top:6px; display:none;"></div>
+      <button class="btn full gold" id="auth-submit" style="margin-top:14px;">Entrar</button>
+      <div style="text-align:center; margin:14px 0; opacity:0.6; font-size:0.8rem;">— ou —</div>
+      <button class="btn full ghost" id="auth-google" style="color:#fff; border-color:#4a6fa5;">🔎 Entrar com Google</button>
+      <div class="hint" style="color:#b9c8e0; margin-top:18px;">Seus relatórios e fotos continuam salvos só neste aparelho. O login serve para controlar seu plano (Grátis/Pro) e a cota de relatórios por mês.</div>
+    </div>
+  </div>
+
   <!-- ============ TELA: LISTA DE RELATÓRIOS ============ -->
   <div id="screen-reports">
+    <div class="card" id="account-status-card" style="display:none;">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
+        <div>
+          <div id="account-email-line" style="font-weight:600; font-size:0.9rem;"></div>
+          <div id="account-plan-line" style="font-size:0.85rem; color:var(--cinza-borda-texto, #666);"></div>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <button class="btn gold" id="btn-upgrade-pro" style="min-height:34px; padding:6px 12px; white-space:nowrap;">⭐ Quero ser Pro</button>
+          <button class="btn ghost" id="btn-logout" style="min-height:34px; padding:6px 12px; white-space:nowrap;">Sair</button>
+        </div>
+      </div>
+    </div>
     <div class="card">
       <button class="btn full gold" id="btn-new-report">➕ Novo relatório</button>
       <button class="btn ghost full" id="btn-select-local-folder">📁 Escolher pasta no disco</button>
@@ -4258,6 +4303,7 @@ SOFTWARE.
 <!-- Firebase (usado só para sincronizar a configuração de cabeçalho entre aparelhos; veja CLOUD_CONFIG mais abaixo) -->
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script>
 // ============================================================
 // App: Relatório Fotográfico de Campo
@@ -4310,10 +4356,12 @@ const CLOUD_SYNC_ENABLED = !!(CLOUD_CONFIG.apiKey && CLOUD_CONFIG.projectId);
 const CLOUD_COLLECTION = 'shared_config';
 const CLOUD_DOC_ID = 'header_settings';
 let cloudDb = null;
+let cloudAuth = null;
 if (CLOUD_SYNC_ENABLED) {
   try {
     firebase.initializeApp(CLOUD_CONFIG);
     cloudDb = firebase.firestore();
+    cloudAuth = firebase.auth();
   } catch (e) {
     console.warn('Não foi possível iniciar a sincronização em nuvem:', e);
   }
@@ -4359,6 +4407,157 @@ async function syncSettingsFromCloudOnLoad() {
   if (cloud) {
     await dbPut('settings', Object.assign({ id: 'default' }, cloud));
   }
+}
+
+// ============================================================
+// CONTA, LOGIN E COTA DO PLANO GRÁTIS/PRO
+// A configuração de cabeçalho continua aberta pra qualquer pessoa com o
+// link (por escolha, pra não travar quem já usa em equipe). O login serve
+// só para controlar quantos relatórios cada CONTA pode criar por mês —
+// os relatórios e fotos em si continuam salvos apenas no aparelho, como
+// sempre foram.
+// ============================================================
+const FREE_REPORT_LIMIT = 3;
+let currentUserAccount = null; // dados de users/{uid} no Firestore: { email, plan, reportsThisMonth, monthKey }
+let currentUserUid = null;
+
+function currentMonthKey() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+}
+
+// Chamado assim que sabemos quem está logado: busca (ou cria, se for a
+// primeira vez) o documento da conta no Firestore, e zera a cota se o mês
+// virou desde a última vez que essa conta foi usada.
+async function onUserLoggedIn(user) {
+  currentUserUid = user.uid;
+  const ref = cloudDb.collection('users').doc(user.uid);
+  let data = null;
+  try {
+    const snap = await ref.get();
+    if (snap.exists) data = snap.data();
+  } catch (e) {
+    console.warn('Falha ao ler dados da conta (tratando como grátis, sem bloquear o uso):', e);
+  }
+  const monthKey = currentMonthKey();
+  if (!data) {
+    data = { email: user.email || '', plan: 'free', reportsThisMonth: 0, monthKey, createdAt: Date.now() };
+    try { await ref.set(data); } catch (e) { console.warn('Falha ao criar conta no banco:', e); }
+  } else if (data.monthKey !== monthKey) {
+    data.monthKey = monthKey;
+    data.reportsThisMonth = 0;
+    try { await ref.update({ monthKey, reportsThisMonth: 0 }); } catch (e) { /* segue mesmo se falhar */ }
+  }
+  currentUserAccount = data;
+  renderAccountStatus();
+}
+
+function renderAccountStatus() {
+  const card = document.getElementById('account-status-card');
+  if (!currentUserAccount) { card.style.display = 'none'; return; }
+  card.style.display = '';
+  document.getElementById('account-email-line').textContent = currentUserAccount.email || '';
+  const isPro = currentUserAccount.plan === 'pro';
+  const usageText = isPro
+    ? 'Relatórios ilimitados'
+    : `${currentUserAccount.reportsThisMonth || 0}/${FREE_REPORT_LIMIT} relatórios este mês`;
+  document.getElementById('account-plan-line').textContent = `Plano: ${isPro ? 'Pro ⭐' : 'Grátis'} — ${usageText}`;
+  document.getElementById('btn-upgrade-pro').style.display = isPro ? 'none' : '';
+}
+
+// Verifica se a conta ainda pode criar mais um relatório este mês. Sem
+// Firebase configurado (CLOUD_SYNC_ENABLED false) ou sem login, o app
+// funciona sem limite algum — o mesmo de sempre.
+async function podeExigirCotaDeRelatorio() {
+  if (!CLOUD_SYNC_ENABLED || !cloudAuth || !currentUserAccount) return true;
+  if (currentUserAccount.plan === 'pro') return true;
+  if ((currentUserAccount.reportsThisMonth || 0) >= FREE_REPORT_LIMIT) {
+    alert(`Você já usou seus ${FREE_REPORT_LIMIT} relatórios grátis deste mês.\n\nToque em "⭐ Quero ser Pro" para liberar relatórios ilimitados.`);
+    return false;
+  }
+  return true;
+}
+// Soma +1 na cota do mês depois que um relatório é criado com sucesso.
+// Nunca impede a criação em si — só falha silenciosamente se o Firestore
+// estiver fora do ar (o relatório já foi salvo localmente de qualquer jeito).
+async function registrarRelatorioCriado() {
+  if (!CLOUD_SYNC_ENABLED || !cloudAuth || !currentUserUid || !currentUserAccount) return;
+  if (currentUserAccount.plan === 'pro') return;
+  currentUserAccount.reportsThisMonth = (currentUserAccount.reportsThisMonth || 0) + 1;
+  renderAccountStatus();
+  try {
+    await cloudDb.collection('users').doc(currentUserUid).update({
+      reportsThisMonth: currentUserAccount.reportsThisMonth,
+      monthKey: currentUserAccount.monthKey,
+    });
+  } catch (e) { console.warn('Falha ao atualizar cota de relatórios na nuvem:', e); }
+}
+
+// ---- tela de login (e-mail/senha + Google) ----
+let authMode = 'login'; // 'login' | 'signup'
+function setAuthMode(mode) {
+  authMode = mode;
+  document.getElementById('auth-tab-login').style.background = mode === 'login' ? 'var(--verde)' : '';
+  document.getElementById('auth-tab-signup').style.background = mode === 'signup' ? 'var(--verde)' : '';
+  document.getElementById('auth-submit').textContent = mode === 'login' ? 'Entrar' : 'Criar conta';
+  document.getElementById('auth-error').style.display = 'none';
+}
+if (CLOUD_SYNC_ENABLED && cloudAuth) {
+  document.getElementById('auth-tab-login').addEventListener('click', () => setAuthMode('login'));
+  document.getElementById('auth-tab-signup').addEventListener('click', () => setAuthMode('signup'));
+  document.getElementById('auth-submit').addEventListener('click', async () => {
+    const email = document.getElementById('auth-email').value.trim();
+    const password = document.getElementById('auth-password').value;
+    const errEl = document.getElementById('auth-error');
+    errEl.style.display = 'none';
+    if (!email || !password) { errEl.textContent = 'Preencha e-mail e senha.'; errEl.style.display = ''; return; }
+    try {
+      if (authMode === 'login') {
+        await cloudAuth.signInWithEmailAndPassword(email, password);
+      } else {
+        await cloudAuth.createUserWithEmailAndPassword(email, password);
+      }
+    } catch (e) {
+      errEl.textContent = traduzirErroAuth(e);
+      errEl.style.display = '';
+    }
+  });
+  document.getElementById('auth-google').addEventListener('click', async () => {
+    const errEl = document.getElementById('auth-error');
+    errEl.style.display = 'none';
+    try {
+      const provider = new firebase.auth.GoogleAuthProvider();
+      await cloudAuth.signInWithPopup(provider);
+    } catch (e) {
+      errEl.textContent = traduzirErroAuth(e);
+      errEl.style.display = '';
+    }
+  });
+  document.getElementById('btn-logout').addEventListener('click', async () => {
+    if (confirm('Sair da conta neste aparelho?')) {
+      await cloudAuth.signOut();
+    }
+  });
+  document.getElementById('btn-upgrade-pro').addEventListener('click', () => {
+    const email = (currentUserAccount && currentUserAccount.email) || '';
+    const msg = encodeURIComponent(`Olá! Quero assinar o plano Pro do Fotoprova. Meu e-mail de login é: ${email}`);
+    // TODO: trocar 55XXXXXXXXXXX pelo número de WhatsApp real de vendas.
+    window.open(`https://wa.me/55XXXXXXXXXXX?text=${msg}`, '_blank');
+  });
+  setAuthMode('login');
+}
+function traduzirErroAuth(e) {
+  const code = e && e.code;
+  const map = {
+    'auth/invalid-email': 'E-mail inválido.',
+    'auth/user-not-found': 'Não achei essa conta. Toque em "Criar conta" se ainda não tem uma.',
+    'auth/wrong-password': 'Senha incorreta.',
+    'auth/email-already-in-use': 'Já existe uma conta com esse e-mail. Toque em "Entrar".',
+    'auth/weak-password': 'A senha precisa ter pelo menos 6 caracteres.',
+    'auth/popup-closed-by-user': 'Login com Google cancelado.',
+    'auth/network-request-failed': 'Sem conexão com a internet — tente novamente.',
+  };
+  return (code && map[code]) || ('Não consegui entrar: ' + (e && e.message ? e.message : 'erro desconhecido'));
 }
 
 const DB_NAME = 'relatorio_fotografico_db';
@@ -4601,6 +4800,8 @@ function fillCadSelect(selectEl, items, previousValue) {
 }
 
 document.getElementById('btn-new-report').addEventListener('click', async () => {
+  const pode = await podeExigirCotaDeRelatorio();
+  if (!pode) return;
   document.getElementById('new-report-name').value = '';
   updateNewReportNamePreview();
   const defaults = (await dbGet('settings', 'default')) || {};
@@ -4644,6 +4845,7 @@ document.getElementById('modal-new-report-save').addEventListener('click', async
   const report = { id: uid(), name, createdAt: Date.now(), localFolderName: sanitizeFilename(name),
     nota, municipio, equipe, supervisor };
   await dbPut('reports', report);
+  registrarRelatorioCriado(); // conta pra cota mensal do plano Grátis (não bloqueia se falhar)
 
   try {
     const folders = await getReportFolders(report, false);
@@ -7222,8 +7424,31 @@ async function exportBackup(reportId) {
 // ============================================================
 // Inicialização
 // ============================================================
-restoreLocalRootHandle().finally(() => goToReportsScreen());
-syncSettingsFromCloudOnLoad().catch((e) => console.warn('Sincronização inicial falhou:', e));
+function startAppAfterAuth() {
+  restoreLocalRootHandle().finally(() => goToReportsScreen());
+  syncSettingsFromCloudOnLoad().catch((e) => console.warn('Sincronização inicial falhou:', e));
+}
+
+if (CLOUD_SYNC_ENABLED && cloudAuth) {
+  document.getElementById('auth-gate').style.display = '';
+  let appJaIniciado = false;
+  cloudAuth.onAuthStateChanged(async (user) => {
+    if (user) {
+      document.getElementById('auth-gate').style.display = 'none';
+      await onUserLoggedIn(user);
+      if (!appJaIniciado) { appJaIniciado = true; startAppAfterAuth(); }
+    } else {
+      currentUserAccount = null;
+      currentUserUid = null;
+      document.getElementById('account-status-card').style.display = 'none';
+      document.getElementById('auth-gate').style.display = '';
+    }
+  });
+} else {
+  // Sem Firebase configurado: o app funciona 100% offline, sem login e
+  // sem limite de relatórios — exatamente como antes.
+  startAppAfterAuth();
+}
 
 // Registra o Service Worker: na primeira visita (com internet) ele salva
 // uma cópia completa do app no aparelho. Nas próximas vezes, mesmo sem
