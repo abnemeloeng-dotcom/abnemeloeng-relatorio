@@ -4541,7 +4541,7 @@ if (CLOUD_SYNC_ENABLED && cloudAuth) {
   document.getElementById('btn-upgrade-pro').addEventListener('click', () => {
     const email = (currentUserAccount && currentUserAccount.email) || '';
     const msg = encodeURIComponent(`Olá! Quero assinar o plano Pro do Fotoprova. Meu e-mail de login é: ${email}`);
-    // TODO: trocar 55XXXXXXXXXXX pelo número de WhatsApp real de vendas.
+    // TODO: trocar 5586999151041 pelo número de WhatsApp real de vendas.
     window.open(`https://wa.me/5586999151941?text=${msg}`, '_blank');
   });
   setAuthMode('login');
