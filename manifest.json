@@ -1,0 +1,15 @@
+{
+  "name": "Fotoprova — Relatório Fotográfico de Campo",
+  "short_name": "Fotoprova",
+  "description": "Substitui câmera + KMZ + montagem manual do relatório fotográfico de campo.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#1a3a5c",
+  "theme_color": "#1a3a5c",
+  "orientation": "portrait-primary",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

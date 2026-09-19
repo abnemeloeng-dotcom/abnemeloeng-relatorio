@@ -1,18 +1,26 @@
-// Service Worker do Relatório Fotográfico de Campo
+// Service Worker do Fotoprova (Relatório Fotográfico de Campo)
 // Objetivo: depois da primeira visita (com internet), o app deve abrir
 // e funcionar 100% mesmo sem nenhuma conexão, para uso em campo.
 
-const CACHE_NAME = 'relatorio-campo-v1';
+const CACHE_NAME = 'relatorio-campo-v2'; // v2: adicionou ícone/manifest da marca Fotoprova
 const APP_SHELL = [
   './',
-  './index.html'
+  './index.html',
+  './manifest.json',
+  './icon-192.png',
+  './icon-512.png',
 ];
 
-// Na instalação, guarda uma cópia do app inteiro (é um único arquivo).
+// Na instalação, guarda uma cópia do app inteiro. Cada arquivo é
+// adicionado individualmente (em vez de cache.addAll, que falha por
+// inteiro se UM arquivo não existir) — assim, se por acaso faltar subir
+// algum ícone novo, quem já está usando o app não fica sem atualização.
 self.addEventListener('install', (event) => {
   self.skipWaiting();
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL))
+    caches.open(CACHE_NAME).then((cache) =>
+      Promise.allSettled(APP_SHELL.map((url) => cache.add(url)))
+    )
   );
 });
 
