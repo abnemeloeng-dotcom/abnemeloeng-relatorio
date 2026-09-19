@@ -12,11 +12,22 @@ Fotoprova é um aplicativo web (PWA) para equipes de campo — vistoria, fiscali
 
 ### Relatórios
 - Criação de relatórios com nome, município, equipe e supervisor responsável (cadastráveis, para preencher por seleção em vez de digitar toda vez).
+- **Cadastro individual de postes/estruturas** dentro de cada relatório, com tipo de atividade (Poste, Poda, Outros).
 - Captura de foto direto da câmera do celular, com carimbo automático de **coordenada GPS + data/hora** na própria imagem.
 - Suporte a leitura de GPS embutido no EXIF da foto (câmeras que já gravam localização) como alternativa ao GPS do navegador.
+- **Mapa dos postes do relatório**, para visualizar espacialmente onde cada estrutura cadastrada está localizada.
+- Diagnóstico de GPS do aparelho (tela dedicada para testar a precisão antes de ir a campo) e entrada manual de coordenadas quando o GPS falha.
 - Estrutura de pastas automática no disco do aparelho (Fotos / Relatório / KMZ / CAD), quando o navegador permite acesso a arquivos locais.
-- Exportação em **PDF** com cabeçalho personalizado (logo + dados da empresa) e em **KMZ** (para abrir no Google Earth).
+- Exportação em **PDF** (2, 4 ou 6 fotos por página, ordenadas cronologicamente, compactado automaticamente para ficar abaixo de 10 MB) com cabeçalho personalizado (logo + dados da empresa).
+- Exportação em **KMZ** (para abrir no Google Earth) e em **DXF** (apoio de layout/distâncias em ferramentas CAD — não substitui uma projeção cartográfica oficial UTM/SIRGAS2000 nem levantamento topográfico).
 - Backup/exportação completa de um relatório em `.zip`.
+
+### Georreferenciamento
+O sistema trabalha com duas referências diferentes:
+1. **Coordenada do poste**: usada para posicionar a estrutura no mapa e nos arquivos geográficos (KMZ/DXF), definida a partir da primeira foto cadastrada naquele poste.
+2. **Coordenada da fotografia**: registrada a partir da posição disponível no momento exato da captura.
+
+Quando o GPS do navegador está disponível, ele é priorizado; há mecanismos alternativos (leitura do EXIF da foto, entrada manual) para quando a localização não é obtida normalmente. A precisão depende do GPS do aparelho, da rede e das condições de campo.
 
 ### Edição e anotação de fotos
 - Ferramentas de anotação: seta, círculo, retângulo, desenho livre, texto, calibração de escala e medição estimada.
