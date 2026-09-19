@@ -1020,6 +1020,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
           <div id="account-plan-line" style="font-size:0.85rem; color:var(--cinza-borda-texto, #666);"></div>
         </div>
         <div style="display:flex; gap:8px;">
+          <button class="btn ghost" id="btn-admin-panel" style="min-height:34px; padding:6px 12px; white-space:nowrap; display:none;">🛠️ Admin</button>
           <button class="btn gold" id="btn-upgrade-pro" style="min-height:34px; padding:6px 12px; white-space:nowrap;">⭐ Quero ser Pro</button>
           <button class="btn ghost" id="btn-logout" style="min-height:34px; padding:6px 12px; white-space:nowrap;">Sair</button>
         </div>
@@ -1365,6 +1366,19 @@ svg.leaflet-image-layer.leaflet-interactive path {
         </div>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- ============ MODAL: painel de administrador (só aparece para o e-mail admin) ============ -->
+<div class="modal-overlay" id="modal-admin">
+  <div class="modal-box">
+    <button class="modal-close-x" id="admin-close">✕</button>
+    <h3>🛠️ Painel de administrador</h3>
+    <div class="hint">Libere ou revogue o plano Pro de qualquer conta cadastrada, sem precisar entrar no Firebase Console.</div>
+    <input type="text" id="admin-search" placeholder="Buscar por e-mail..." style="margin-top:10px;">
+    <button class="btn ghost full" id="admin-refresh" style="margin-top:8px;">🔄 Atualizar lista</button>
+    <div id="admin-loading" class="hint" style="display:none;">Carregando contas...</div>
+    <div id="admin-user-list" style="margin-top:12px;"></div>
   </div>
 </div>
 
@@ -4353,6 +4367,10 @@ const CLOUD_CONFIG = {
   appId: "1:238315032722:web:14bea4da1e780b451a964b",
 };
 const CLOUD_SYNC_ENABLED = !!(CLOUD_CONFIG.apiKey && CLOUD_CONFIG.projectId);
+// E-mails que enxergam o botão "🛠️ Admin" e conseguem abrir o painel de
+// contas. A proteção de verdade fica nas REGRAS do Firestore (veja
+// docs/firebase-setup.md) — isto aqui só controla se o botão aparece.
+const ADMIN_EMAILS = ['abnemelo.eng@gmail.com'];
 const CLOUD_COLLECTION = 'shared_config';
 const CLOUD_DOC_ID = 'header_settings';
 let cloudDb = null;
@@ -4417,7 +4435,7 @@ async function syncSettingsFromCloudOnLoad() {
 // os relatórios e fotos em si continuam salvos apenas no aparelho, como
 // sempre foram.
 // ============================================================
-const FREE_REPORT_LIMIT = 3;
+const FREE_REPORT_LIMIT = 10;
 let currentUserAccount = null; // dados de users/{uid} no Firestore: { email, plan, reportsThisMonth, monthKey }
 let currentUserUid = null;
 
@@ -4441,13 +4459,14 @@ async function onUserLoggedIn(user) {
   }
   const monthKey = currentMonthKey();
   if (!data) {
-    data = { email: user.email || '', plan: 'free', reportsThisMonth: 0, monthKey, createdAt: Date.now() };
+    data = { email: user.email || '', plan: 'free', reportsThisMonth: 0, reportsTotal: 0, monthKey, createdAt: Date.now() };
     try { await ref.set(data); } catch (e) { console.warn('Falha ao criar conta no banco:', e); }
   } else if (data.monthKey !== monthKey) {
     data.monthKey = monthKey;
     data.reportsThisMonth = 0;
     try { await ref.update({ monthKey, reportsThisMonth: 0 }); } catch (e) { /* segue mesmo se falhar */ }
   }
+  if (data.reportsTotal === undefined) data.reportsTotal = data.reportsThisMonth || 0; // conta antiga, sem esse campo ainda
   currentUserAccount = data;
   renderAccountStatus();
 }
@@ -4459,9 +4478,11 @@ function renderAccountStatus() {
   document.getElementById('account-email-line').textContent = currentUserAccount.email || '';
   const isPro = currentUserAccount.plan === 'pro';
   const usageText = isPro
-    ? 'Relatórios ilimitados'
-    : `${currentUserAccount.reportsThisMonth || 0}/${FREE_REPORT_LIMIT} relatórios este mês`;
+    ? `Relatórios ilimitados — ${currentUserAccount.reportsTotal || 0} no total`
+    : `${currentUserAccount.reportsThisMonth || 0}/${FREE_REPORT_LIMIT} relatórios este mês — ${currentUserAccount.reportsTotal || 0} no total`;
   document.getElementById('account-plan-line').textContent = `Plano: ${isPro ? 'Pro ⭐' : 'Grátis'} — ${usageText}`;
+  document.getElementById('btn-admin-panel').style.display =
+    ADMIN_EMAILS.includes((currentUserAccount.email || '').toLowerCase()) ? '' : 'none';
   document.getElementById('btn-upgrade-pro').style.display = isPro ? 'none' : '';
 }
 
@@ -4477,17 +4498,22 @@ async function podeExigirCotaDeRelatorio() {
   }
   return true;
 }
-// Soma +1 na cota do mês depois que um relatório é criado com sucesso.
+// Soma +1 na cota do mês (só conta pro limite do plano Grátis) e +1 no
+// total histórico (contado sempre, mesmo no Pro — é só para
+// acompanhamento no painel admin, nunca bloqueia ninguém).
 // Nunca impede a criação em si — só falha silenciosamente se o Firestore
 // estiver fora do ar (o relatório já foi salvo localmente de qualquer jeito).
 async function registrarRelatorioCriado() {
   if (!CLOUD_SYNC_ENABLED || !cloudAuth || !currentUserUid || !currentUserAccount) return;
-  if (currentUserAccount.plan === 'pro') return;
-  currentUserAccount.reportsThisMonth = (currentUserAccount.reportsThisMonth || 0) + 1;
+  currentUserAccount.reportsTotal = (currentUserAccount.reportsTotal || 0) + 1;
+  if (currentUserAccount.plan !== 'pro') {
+    currentUserAccount.reportsThisMonth = (currentUserAccount.reportsThisMonth || 0) + 1;
+  }
   renderAccountStatus();
   try {
     await cloudDb.collection('users').doc(currentUserUid).update({
       reportsThisMonth: currentUserAccount.reportsThisMonth,
+      reportsTotal: currentUserAccount.reportsTotal,
       monthKey: currentUserAccount.monthKey,
     });
   } catch (e) { console.warn('Falha ao atualizar cota de relatórios na nuvem:', e); }
@@ -4541,10 +4567,89 @@ if (CLOUD_SYNC_ENABLED && cloudAuth) {
   document.getElementById('btn-upgrade-pro').addEventListener('click', () => {
     const email = (currentUserAccount && currentUserAccount.email) || '';
     const msg = encodeURIComponent(`Olá! Quero assinar o plano Pro do Fotoprova. Meu e-mail de login é: ${email}`);
-    // TODO: trocar 5586999151041 pelo número de WhatsApp real de vendas.
-    window.open(`https://wa.me/5586999151941?text=${msg}`, '_blank');
+    // Número de WhatsApp de vendas — atualizado.
+    window.open(`https://wa.me/5586999151041?text=${msg}`, '_blank');
   });
   setAuthMode('login');
+
+  // ---- painel de administrador ----
+  let adminUsersCache = [];
+  document.getElementById('btn-admin-panel').addEventListener('click', () => {
+    document.getElementById('modal-admin').classList.add('show');
+    document.getElementById('admin-search').value = '';
+    carregarUsuariosAdmin();
+  });
+  document.getElementById('admin-close').addEventListener('click', () => {
+    document.getElementById('modal-admin').classList.remove('show');
+  });
+  document.getElementById('admin-refresh').addEventListener('click', carregarUsuariosAdmin);
+  document.getElementById('admin-search').addEventListener('input', renderizarListaAdmin);
+
+  async function carregarUsuariosAdmin() {
+    const loading = document.getElementById('admin-loading');
+    const listEl = document.getElementById('admin-user-list');
+    loading.style.display = '';
+    listEl.innerHTML = '';
+    try {
+      const snap = await cloudDb.collection('users').get();
+      adminUsersCache = [];
+      snap.forEach((doc) => adminUsersCache.push({ uid: doc.id, ...doc.data() }));
+      adminUsersCache.sort((a, b) => (a.email || '').localeCompare(b.email || ''));
+      renderizarListaAdmin();
+    } catch (e) {
+      listEl.innerHTML = `<div class="hint" style="color:var(--vermelho);">Não consegui carregar a lista: ${e.message}. Confira se as regras do Firestore já liberam este e-mail como admin (veja docs/firebase-setup.md).</div>`;
+    }
+    loading.style.display = 'none';
+  }
+
+  function renderizarListaAdmin() {
+    const termo = document.getElementById('admin-search').value.trim().toLowerCase();
+    const listEl = document.getElementById('admin-user-list');
+    const filtrados = adminUsersCache.filter((u) => !termo || (u.email || '').toLowerCase().includes(termo));
+    const totalMes = adminUsersCache.reduce((soma, u) => soma + (u.reportsThisMonth || 0), 0);
+    const totalGeral = adminUsersCache.reduce((soma, u) => soma + (u.reportsTotal || 0), 0);
+    const resumoHtml = `
+      <div style="display:flex; gap:16px; flex-wrap:wrap; padding:10px 0; border-bottom:2px solid var(--cinza-borda); margin-bottom:8px; font-size:0.85rem;">
+        <div><strong>${adminUsersCache.length}</strong> conta(s)</div>
+        <div><strong>${totalMes}</strong> relatório(s) este mês (todas as contas)</div>
+        <div><strong>${totalGeral}</strong> relatório(s) no total (histórico)</div>
+      </div>`;
+    if (!filtrados.length) {
+      listEl.innerHTML = resumoHtml + '<div class="hint">Nenhuma conta encontrada.</div>';
+      return;
+    }
+    listEl.innerHTML = resumoHtml + filtrados.map((u) => {
+      const isPro = u.plan === 'pro';
+      return `
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; padding:10px 0; border-bottom:1px solid var(--cinza-borda);">
+          <div>
+            <div style="font-weight:600; font-size:0.88rem;">${(u.email || u.uid).replace(/</g, '&lt;')}</div>
+            <div style="font-size:0.78rem; color:var(--texto-suave);">Plano: ${isPro ? 'Pro ⭐' : 'Grátis'} — ${u.reportsThisMonth || 0} este mês · ${u.reportsTotal || 0} no total</div>
+          </div>
+          <button class="btn ${isPro ? 'ghost' : 'gold'} admin-toggle-plan" data-uid="${u.uid}" data-newplan="${isPro ? 'free' : 'pro'}" style="min-height:32px; padding:6px 10px; white-space:nowrap;">
+            ${isPro ? 'Tornar Grátis' : 'Tornar Pro'}
+          </button>
+        </div>`;
+    }).join('');
+    listEl.querySelectorAll('.admin-toggle-plan').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const uid = btn.dataset.uid;
+        const newPlan = btn.dataset.newplan;
+        btn.disabled = true;
+        btn.textContent = 'Salvando...';
+        try {
+          await cloudDb.collection('users').doc(uid).update({ plan: newPlan });
+          const u = adminUsersCache.find((x) => x.uid === uid);
+          if (u) u.plan = newPlan;
+          renderizarListaAdmin();
+          if (uid === currentUserUid) { currentUserAccount.plan = newPlan; renderAccountStatus(); }
+        } catch (e) {
+          alert('Não consegui salvar: ' + e.message);
+          btn.disabled = false;
+        }
+      });
+    });
+  }
 }
 function traduzirErroAuth(e) {
   const code = e && e.code;

@@ -1,304 +1,133 @@
-# Relatório Fotográfico de Campo – Sistema de Inspeção Georreferenciada
+# 📷 Fotoprova
 
-Sistema web/mobile desenvolvido para apoiar atividades de campo que envolvem registro fotográfico, identificação de postes, coordenadas geográficas e geração de arquivos técnicos.
+**Relatório fotográfico de campo — substitui câmera + KMZ + montagem manual do relatório.**
 
-## Objetivo
+Fotoprova é um aplicativo web (PWA) para equipes de campo — vistoria, fiscalização, manutenção de postes/redes, engenharia, construção civil — que precisam fotografar locais, anotar as fotos e gerar um relatório em PDF com coordenadas GPS, tudo direto do celular, sem depender de internet no momento da captura.
 
-Centralizar em uma única aplicação etapas que normalmente exigem câmera, anotações, organização manual de fotografias, elaboração de relatório e geração de arquivos geográficos/CAD.
-
-A proposta do projeto é transformar um processo operacional de campo em um fluxo digital mais organizado, rastreável e reutilizável.
-
-## Principais recursos
-
-- Criação e gerenciamento de relatórios.
-- Cadastro de postes/estruturas.
-- Captura de fotografias pelo aparelho.
-- Registro da coordenada GPS no momento da captura.
-- Definição da coordenada do pé do poste a partir da primeira foto.
-- Inserção de descrição nas fotografias.
-- Anotação gráfica sobre a foto.
-- Ferramentas de seta, círculo, retângulo, desenho livre e texto.
-- Calibração de escala e medição estimada sobre a fotografia.
-- Mapa dos postes do relatório.
-- Diagnóstico do GPS do aparelho.
-- Entrada manual de coordenadas quando necessário.
-- Configuração de empresa, endereço, responsável técnico e logo.
-- Geração de relatório PDF.
-- Opções de 2, 4 ou 6 fotos por página.
-- Ordenação cronológica das fotografias.
-- Compactação automática do PDF para ficar abaixo de 10 MB.
-- Geração de KMZ.
-- Geração de DXF para apoio de layout/distâncias.
-- Exportação de backup em ZIP.
-- Organização dos arquivos em pastas locais quando o navegador oferece suporte.
-- Armazenamento local no navegador.
-- Suporte a operação offline após o primeiro carregamento, por meio de Service Worker.
-
-## Estrutura local dos arquivos
-
-Quando utilizada a seleção de pasta local, o sistema organiza o relatório em uma estrutura semelhante a:
-
-```text
-Pasta escolhida/
-└── Nome do relatório/
-    ├── Fotos/
-    ├── Relatorio/
-    ├── KMZ/
-    └── CAD/
-```
-
-## Fluxo de utilização
-
-```text
-Configurar empresa/logo
-        ↓
-Criar relatório
-        ↓
-Cadastrar poste
-        ↓
-Capturar primeira foto
-        ↓
-Registrar coordenada do pé do poste
-        ↓
-Adicionar demais fotos
-        ↓
-Inserir descrição/anotações
-        ↓
-Cadastrar próximos postes
-        ↓
-Visualizar mapa
-        ↓
-Gerar PDF / KMZ / DXF
-        ↓
-Exportar backup
-```
-
-## Georreferenciamento
-
-O sistema trabalha com duas referências diferentes:
-
-1. **Coordenada do poste:** utilizada para posicionar o poste no mapa e nos arquivos geográficos.
-2. **Coordenada da fotografia:** registrada a partir da posição disponível no momento da captura.
-
-Quando o GPS do navegador está disponível, ele é priorizado. O projeto também possui mecanismos alternativos para situações em que a localização não é obtida normalmente, incluindo entrada manual de latitude e longitude.
-
-### Importante sobre precisão
-
-O sistema registra a posição fornecida pelo aparelho/navegador. A precisão depende do GPS, rede, ambiente e condições de campo.
-
-O DXF gerado pela aplicação não deve ser tratado como levantamento topográfico ou como transformação oficial para UTM/SIRGAS2000. O recurso é destinado ao apoio de layout e representação das posições.
-
-## PDF
-
-O relatório pode ser configurado para:
-
-- 2 fotos por página;
-- 4 fotos por página;
-- 6 fotos por página.
-
-As fotografias são organizadas cronologicamente. Cada registro pode apresentar identificação, coordenadas, data/hora e descrição associada.
-
-## KMZ
-
-O projeto gera um arquivo KMZ contendo elementos geográficos relacionados aos postes e fotografias do relatório.
-
-O KMZ é destinado à visualização e compartilhamento das informações georreferenciadas.
-
-## DXF
-
-O sistema também produz um arquivo DXF para utilização em ferramentas CAD.
-
-**Limitação:** a conversão utilizada pela aplicação é uma representação local para layout/distâncias e não substitui uma projeção cartográfica oficial nem um levantamento topográfico.
-
-## Armazenamento e backup
-
-Os dados de trabalho são armazenados localmente no navegador. As fotografias não precisam ficar misturadas com a galeria convencional do aparelho.
-
-Por segurança, relatórios concluídos devem ser exportados para PDF/KMZ/DXF e, quando necessário, deve ser utilizado o backup ZIP.
-
-## Funcionamento offline
-
-O projeto possui um Service Worker que armazena o aplicativo em cache. Depois do primeiro carregamento, o sistema pode continuar funcionando sem conexão para as funções que dependem apenas dos dados locais e dos recursos já armazenados.
-
-A disponibilidade de mapas online e outros recursos externos pode depender de conexão.
-
-## Tecnologias
-
-- HTML5
-- CSS3
-- JavaScript
-- IndexedDB
-- File System Access API
-- Geolocation API
-- Canvas API
-- Service Worker
-- Leaflet 1.9.4
-- Geração de PDF
-- Geração de KMZ/KML
-- Geração de DXF
-
-## Arquitetura simplificada
-
-```text
-Interface Web
-     │
-     ├── Relatórios
-     ├── Postes
-     ├── Fotografias
-     ├── GPS
-     ├── Mapa
-     └── Exportações
-            │
-            ├── PDF
-            ├── KMZ
-            ├── DXF
-            └── ZIP
-     │
-     ▼
-IndexedDB / armazenamento local
-     │
-     ▼
-Pasta local / arquivos exportados
-```
-
-## Como executar
-
-### Opção 1 — servidor local
-
-Abra a aplicação por um servidor local/HTTPS para obter o melhor suporte às APIs de localização e armazenamento de arquivos.
-
-Exemplo:
-
-```bash
-python -m http.server 8000
-```
-
-Depois acesse:
-
-```text
-http://localhost:8000/app/
-```
-
-### Opção 2 — hospedagem
-
-O projeto pode ser hospedado em um serviço compatível com páginas web estáticas.
-
-Para uso do GPS, HTTPS é recomendado.
-
-## Estrutura do repositório
-
-```text
-relatorio-fotografico-campo/
-├── README.md
-├── LICENSE
-├── .gitignore
-├── app/
-│   ├── index.html
-│   └── sw.js
-├── docs/
-│   ├── arquitetura.md
-│   ├── funcionamento.md
-│   ├── manual-de-uso.md
-│   ├── georreferenciamento.md
-│   ├── armazenamento-e-backup.md
-│   └── evolucao-do-projeto.md
-├── screenshots/
-├── examples/
-│   ├── pdf/
-│   ├── kmz/
-│   └── dxf/
-└── assets/
-    └── logo/
-```
-
-## Aplicação prática
-
-O projeto foi pensado para cenários de inspeção e acompanhamento de campo nos quais é necessário relacionar:
-
-**estrutura + fotografia + descrição + coordenada + documento técnico.**
-
-Isso reduz a dependência de organização manual posterior e cria uma sequência de dados mais consistente para geração dos produtos finais.
-
-## Problema de engenharia x solução tecnológica
-
-| Problema de campo | Solução |
-|---|---|
-| Fotografias ficam misturadas na galeria | Armazenamento organizado dentro da aplicação |
-| Necessidade de identificar cada poste | Cadastro individual de estruturas |
-| Dificuldade de associar foto à localização | Registro de coordenada no momento da captura |
-| Montagem manual do relatório | Geração automática de PDF |
-| Necessidade de visualizar postes no mapa | Mapa integrado |
-| Compartilhamento geográfico | Geração de KMZ |
-| Necessidade de apoio em CAD | Geração de DXF |
-| Perda de dados de campo | Exportação de backup |
-| Dependência de conexão | Recursos locais e cache offline |
-
-## Limitações conhecidas
-
-- A precisão das coordenadas depende do dispositivo e das condições de recepção.
-- Recursos que dependem de mapas/serviços externos podem exigir internet.
-- O DXF não representa uma projeção oficial UTM/SIRGAS2000.
-- Os dados ainda não constituem um sistema de banco de dados remoto multiusuário.
-- A limpeza dos dados do navegador pode afetar informações que ainda não foram exportadas.
-
-## Evolução planejada
-
-Possíveis evoluções futuras:
-
-- sincronização com banco de dados remoto;
-- autenticação de usuários;
-- painel web para acompanhamento de equipes;
-- integração com APIs de mapas;
-- melhoria da exportação CAD;
-- modelos de relatório configuráveis;
-- histórico de alterações;
-- assinatura digital;
-- integração com sistemas corporativos;
-- indicadores e dashboards de campo.
-
-## Screenshots
-
-As imagens reais da aplicação devem ser adicionadas à pasta `screenshots/`.
-
-Sugestão:
-
-```text
-01-tela-inicial.png
-02-configuracao-empresa.png
-03-novo-relatorio.png
-04-cadastro-poste.png
-05-captura-fotografica.png
-06-legenda-foto.png
-07-anotacao-foto.png
-08-diagnostico-gps.png
-09-mapa-postes.png
-10-geracao-pdf.png
-11-relatorio-pdf.png
-12-geracao-kmz.png
-13-geracao-dxf.png
-14-backup.png
-```
-
-## Autor
-
-**Eng. Abne Melo dos Santos**
-
-Projeto desenvolvido com foco em engenharia, digitalização de processos de campo e criação de soluções práticas utilizando tecnologia.
-
-## Desenvolvimento com inteligência artificial
-
-O projeto foi desenvolvido com apoio de inteligência artificial, utilizada como ferramenta de auxílio na estruturação, programação, análise, correção e evolução da solução.
-
-## Status
-
-**Projeto funcional / em evolução.**
-
-A aplicação continua aberta para melhorias conforme necessidades reais identificadas em campo.
+> Funciona 100% offline depois da primeira visita. Não existe servidor: os relatórios e fotos ficam salvos apenas no aparelho de quem os criou.
 
 ---
 
-### Objetivo de portfólio
+## ✨ Funcionalidades
 
-Este projeto demonstra a aplicação de tecnologia para resolver um problema real de engenharia e operação de campo, unindo:
+### Relatórios
+- Criação de relatórios com nome, município, equipe e supervisor responsável (cadastráveis, para preencher por seleção em vez de digitar toda vez).
+- Captura de foto direto da câmera do celular, com carimbo automático de **coordenada GPS + data/hora** na própria imagem.
+- Suporte a leitura de GPS embutido no EXIF da foto (câmeras que já gravam localização) como alternativa ao GPS do navegador.
+- Estrutura de pastas automática no disco do aparelho (Fotos / Relatório / KMZ / CAD), quando o navegador permite acesso a arquivos locais.
+- Exportação em **PDF** com cabeçalho personalizado (logo + dados da empresa) e em **KMZ** (para abrir no Google Earth).
+- Backup/exportação completa de um relatório em `.zip`.
 
-**Engenharia + Georreferenciamento + Automação + Desenvolvimento Web + Organização de Dados.**
+### Edição e anotação de fotos
+- Ferramentas de anotação: seta, círculo, retângulo, desenho livre, texto, calibração de escala e medição estimada.
+- Controles deslizantes de **espessura de traço** e **tamanho de texto**, aplicados a cada nova anotação.
+- Ferramenta **✋ Mover**: toque numa anotação já feita e arraste para reposicionar, sem precisar apagar e redesenhar.
+
+### Evidência avulsa de local (fora do relatório)
+- Botão dedicado para tirar uma **foto ou gravar um vídeo curto** de um local, sem que isso entre em nenhum relatório — útil para guardar uma prova rápida antes de decidir se vale um relatório completo.
+- **Marca d'água de localização estilo app de GPS**: uma miniatura de mapa (OpenStreetMap) com pino no ponto exato, coordenadas e data/hora, num cartão discreto no canto da foto/vídeo.
+- Logo e nome da empresa desenhados discretamente no canto da foto/vídeo (mesmos dados cadastrados em "⚙️ Cabeçalho").
+- No modo foto: a descrição do local é digitada **depois** de tirar a foto, e é aplicada sobre a imagem já carimbada.
+- No modo vídeo: a gravação é feita ao vivo desenhando a câmera + a marca d'água num `<canvas>`, gravado com `MediaRecorder` — a informação fica realmente "queimada" nos quadros do vídeo (formato `.webm`).
+- Botões de **Baixar** e **Compartilhar** (Web Share API) para tirar a mídia do app na hora.
+
+### Configuração de cabeçalho compartilhada (multi-aparelho)
+- Logo, nome da empresa, endereço e responsável técnico configuráveis em "⚙️ Cabeçalho".
+- Sincronização automática via **Firebase Firestore**: o que uma pessoa salva aparece para todos que abrem o link do app (ver [`docs/firebase-setup.md`](docs/firebase-setup.md) para configurar).
+- Sem Firebase configurado, o app funciona normalmente, só que cada aparelho guarda sua própria configuração local (comportamento padrão de PWA).
+
+### Contas, login e plano Grátis/Pro
+- Login por e-mail/senha ou "Entrar com Google" (Firebase Authentication).
+- Plano **Grátis**: até 10 relatórios novos por mês por conta.
+- Plano **Pro**: relatórios ilimitados (liberado manualmente pela administração por enquanto — ver seção [Monetização](#monetização-e-planos)).
+- Indicador do plano e cota de uso no topo da tela inicial, com botão para pedir upgrade.
+- **Painel de administrador** (visível só para o e-mail configurado em `ADMIN_EMAILS`): lista todas as contas cadastradas, com total de relatórios do mês e histórico geral, e um botão para alternar qualquer conta entre Grátis/Pro sem precisar abrir o Firebase Console.
+
+### PWA / offline
+- Instalável na tela inicial do Android (ícone e nome próprios: **Fotoprova**).
+- Service Worker cacheia o app inteiro na primeira visita; funciona sem internet a partir daí.
+- Atualizações do app chegam sozinhas: abre com a versão salva na hora, baixa a versão nova por trás, e ela aparece na abertura seguinte.
+
+---
+
+## 🧱 Stack técnica
+
+- **Frontend**: HTML + CSS + JavaScript puro, em um único arquivo (`index.html`). Sem framework, sem build step.
+- **Armazenamento local**: IndexedDB (relatórios, fotos, configurações) + File System Access API (pastas no disco, quando suportado).
+- **Nuvem (opcional)**: Firebase — Firestore (configuração compartilhada + contas/planos) e Authentication (login).
+- **Bibliotecas embutidas**: jsPDF (geração de PDF), JSZip (backup em `.zip`), Leaflet + tiles do OpenStreetMap (mapas).
+- **PWA**: `manifest.json` + `sw.js` (Service Worker com estratégia "stale-while-revalidate").
+
+---
+
+## 🚀 Publicando/atualizando o app (GitHub Pages)
+
+1. Faça upload (ou substitua) os arquivos na raiz do repositório:
+   - `index.html`
+   - `sw.js`
+   - `manifest.json`
+   - `icon-192.png`
+   - `icon-512.png`
+2. Espere 1–2 minutos para o GitHub Pages publicar.
+3. Quem já usa o app abre normalmente: a versão nova é baixada em segundo plano e passa a valer na abertura seguinte.
+
+Não é necessário nenhum passo de build — é um site estático puro.
+
+---
+
+## ☁️ Configurando a nuvem (Firebase)
+
+A sincronização do cabeçalho e o sistema de login/plano usam o mesmo projeto Firebase. O passo a passo completo (criar projeto, ativar Firestore, regras de acesso, ativar login por e-mail/Google) está em:
+
+📄 [`docs/firebase-setup.md`](docs/firebase-setup.md)
+
+Sem essa configuração preenchida no `CLOUD_CONFIG` do `index.html`, o app funciona 100% offline, sem login e sem limite de relatórios — exatamente como antes de existir essa funcionalidade.
+
+---
+
+## 💰 Monetização e planos
+
+Modelo atual (fase inicial, ver [`docs/roadmap.md`](docs/roadmap.md) para o plano completo):
+
+| Plano | Limite | Como é liberado |
+|---|---|---|
+| Grátis | 10 relatórios/mês por conta | Automático ao criar a conta |
+| Pro | Ilimitado | Manual: administrador troca `plan: "free"` → `"pro"` no documento da pessoa em Firestore → coleção `users` |
+
+O botão "⭐ Quero ser Pro" abre uma conversa de WhatsApp pré-preenchida com o e-mail da conta, para agilizar a liberação manual enquanto o pagamento não está automatizado (próximo passo natural: Stripe ou Pix com confirmação automática).
+
+**Observação importante**: hoje a cota de relatórios é contada **por conta individual**, não por empresa — e a configuração de cabeçalho continua **aberta** (sem exigir login), por decisão consciente para não travar equipes que já compartilham o mesmo cabeçalho. Ambos os pontos são candidatos a mudar quando o produto crescer (ver roadmap).
+
+---
+
+## 📁 Estrutura do repositório
+
+```
+├── index.html          # o app inteiro (HTML + CSS + JS)
+├── sw.js                # Service Worker (cache offline)
+├── manifest.json         # metadados do PWA (nome, ícone, cores)
+├── icon-192.png          # ícone do app (192×192)
+├── icon-512.png          # ícone do app (512×512)
+├── assets/logo/           # logo em SVG/PNG para uso fora do app (divulgação)
+├── docs/
+│   ├── firebase-setup.md  # passo a passo de configuração do Firebase
+│   └── roadmap.md         # plano de produto e monetização
+├── examples/              # exemplos de relatórios/uso (se houver)
+├── screenshots/           # capturas de tela do app
+└── CHANGELOG.md           # histórico de versões
+```
+
+---
+
+## ⚠️ Limitações conhecidas
+
+- Vídeo de evidência é salvo em `.webm` — a maioria dos players Android abre normalmente, mas pode não abrir em alguns apps/iPhone sem conversão.
+- A miniatura de mapa (na evidência de local) depende de internet no momento da captura; sem conexão, aparece um retângulo de cor sólida no lugar, sem travar a captura.
+- Sem conta paga automatizada ainda — upgrades são liberados manualmente.
+- A cota de relatórios do plano Grátis é por conta de login, não por empresa/equipe.
+
+---
+
+## 📜 Licença e uso
+
+Projeto de uso interno/comercial da Fotoprova. Direitos reservados ao autor do repositório.
