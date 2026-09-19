@@ -6,7 +6,7 @@ Plano de evolução do produto, da fase atual (MVP funcional com testadores) at�
 
 - ✅ App funcional, usado por testadores reais.
 - ✅ Marca própria (nome, logo, ícone, PWA instalável).
-- ✅ Login (e-mail/senha + Google) e plano Grátis (3 relatórios/mês) vs Pro (ilimitado, liberação manual).
+- ✅ Login (e-mail/senha + Google) e plano Grátis (10 relatórios/mês) vs Pro (ilimitado, liberação manual).
 - ✅ Sincronização de configuração de cabeçalho entre aparelhos.
 - ✅ Evidência avulsa de local (foto/vídeo com marca d'água de localização).
 
