@@ -1018,6 +1018,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
         <div>
           <div id="account-email-line" style="font-weight:600; font-size:0.9rem;"></div>
           <div id="account-plan-line" style="font-size:0.85rem; color:var(--cinza-borda-texto, #666);"></div>
+          <div style="font-size:0.72rem; color:var(--cinza-borda-texto, #999); margin-top:2px;">Aparelho: <span id="account-device-id"></span></div>
         </div>
         <div style="display:flex; gap:8px;">
           <button class="btn ghost" id="btn-admin-panel" style="min-height:34px; padding:6px 12px; white-space:nowrap; display:none;">🛠️ Admin</button>
@@ -4439,6 +4440,34 @@ const FREE_REPORT_LIMIT = 10;
 let currentUserAccount = null; // dados de users/{uid} no Firestore: { email, plan, reportsThisMonth, monthKey }
 let currentUserUid = null;
 
+// Código único deste aparelho/navegador, gerado uma vez e guardado no
+// localStorage (sobrevive a fechar o app, mas não a "limpar dados do site").
+// Usado para vincular o plano Pro a um aparelho específico por conta —
+// assim, uma mesma conta Google logada em dois celulares diferentes não dá
+// Pro simultâneo nos dois sem o administrador aprovar cada aparelho.
+function getOrCreateDeviceId() {
+  try {
+    let id = localStorage.getItem('fotoprova_device_id');
+    if (!id) {
+      id = (crypto.randomUUID ? crypto.randomUUID() : 'dev-' + Date.now() + '-' + Math.random().toString(36).slice(2))
+        .slice(0, 8).toUpperCase();
+      localStorage.setItem('fotoprova_device_id', id);
+    }
+    return id;
+  } catch (e) {
+    return 'SEM-ID'; // localStorage bloqueado (raro) — degrada sem travar o app
+  }
+}
+const CURRENT_DEVICE_ID = getOrCreateDeviceId();
+
+// Uma conta só é tratada como Pro DE FATO neste aparelho se: o plano é
+// "pro" E (ainda não há aparelho vinculado, OU o vinculado é este). Um
+// plano "pro" vinculado a outro aparelho aparece como Grátis aqui.
+function contaEhProNesteAparelho(conta) {
+  if (!conta || conta.plan !== 'pro') return false;
+  return !conta.authorizedDeviceId || conta.authorizedDeviceId === CURRENT_DEVICE_ID;
+}
+
 function currentMonthKey() {
   const d = new Date();
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
@@ -4459,7 +4488,7 @@ async function onUserLoggedIn(user) {
   }
   const monthKey = currentMonthKey();
   if (!data) {
-    data = { email: user.email || '', plan: 'free', reportsThisMonth: 0, reportsTotal: 0, monthKey, createdAt: Date.now() };
+    data = { email: user.email || '', plan: 'free', reportsThisMonth: 0, reportsTotal: 0, monthKey, createdAt: Date.now(), authorizedDeviceId: null, lastSeenDeviceId: CURRENT_DEVICE_ID };
     try { await ref.set(data); } catch (e) { console.warn('Falha ao criar conta no banco:', e); }
   } else if (data.monthKey !== monthKey) {
     data.monthKey = monthKey;
@@ -4467,6 +4496,12 @@ async function onUserLoggedIn(user) {
     try { await ref.update({ monthKey, reportsThisMonth: 0 }); } catch (e) { /* segue mesmo se falhar */ }
   }
   if (data.reportsTotal === undefined) data.reportsTotal = data.reportsThisMonth || 0; // conta antiga, sem esse campo ainda
+  // Atualiza qual foi o último aparelho a logar nesta conta (visível pro admin,
+  // não muda sozinho o aparelho autorizado — isso só o admin decide).
+  if (data.lastSeenDeviceId !== CURRENT_DEVICE_ID) {
+    data.lastSeenDeviceId = CURRENT_DEVICE_ID;
+    try { await ref.update({ lastSeenDeviceId: CURRENT_DEVICE_ID }); } catch (e) { /* não crítico */ }
+  }
   currentUserAccount = data;
   renderAccountStatus();
 }
@@ -4476,22 +4511,32 @@ function renderAccountStatus() {
   if (!currentUserAccount) { card.style.display = 'none'; return; }
   card.style.display = '';
   document.getElementById('account-email-line').textContent = currentUserAccount.email || '';
-  const isPro = currentUserAccount.plan === 'pro';
+  const isAdmin = ADMIN_EMAILS.includes((currentUserAccount.email || '').toLowerCase());
+  const proBloqueadoPorAparelho = currentUserAccount.plan === 'pro' && !contaEhProNesteAparelho(currentUserAccount);
+  const isPro = isAdmin || contaEhProNesteAparelho(currentUserAccount);
   const usageText = isPro
     ? `Relatórios ilimitados — ${currentUserAccount.reportsTotal || 0} no total`
     : `${currentUserAccount.reportsThisMonth || 0}/${FREE_REPORT_LIMIT} relatórios este mês — ${currentUserAccount.reportsTotal || 0} no total`;
-  document.getElementById('account-plan-line').textContent = `Plano: ${isPro ? 'Pro ⭐' : 'Grátis'} — ${usageText}`;
-  document.getElementById('btn-admin-panel').style.display =
-    ADMIN_EMAILS.includes((currentUserAccount.email || '').toLowerCase()) ? '' : 'none';
+  let rotuloPlano = isAdmin ? 'Admin ⭐' : (isPro ? 'Pro ⭐' : 'Grátis');
+  if (proBloqueadoPorAparelho) rotuloPlano = 'Grátis (Pro vinculado a outro aparelho)';
+  document.getElementById('account-plan-line').textContent = `Plano: ${rotuloPlano} — ${usageText}`;
+  document.getElementById('account-device-id').textContent = CURRENT_DEVICE_ID;
+  document.getElementById('btn-admin-panel').style.display = isAdmin ? '' : 'none';
   document.getElementById('btn-upgrade-pro').style.display = isPro ? 'none' : '';
 }
 
 // Verifica se a conta ainda pode criar mais um relatório este mês. Sem
 // Firebase configurado (CLOUD_SYNC_ENABLED false) ou sem login, o app
-// funciona sem limite algum — o mesmo de sempre.
+// funciona sem limite algum — o mesmo de sempre. O e-mail administrador
+// nunca é bloqueado, independentemente do campo "plan" salvo no Firestore.
 async function podeExigirCotaDeRelatorio() {
   if (!CLOUD_SYNC_ENABLED || !cloudAuth || !currentUserAccount) return true;
-  if (currentUserAccount.plan === 'pro') return true;
+  if (ADMIN_EMAILS.includes((currentUserAccount.email || '').toLowerCase())) return true;
+  if (contaEhProNesteAparelho(currentUserAccount)) return true;
+  if (currentUserAccount.plan === 'pro') {
+    alert('Este aparelho não é o autorizado para o plano Pro desta conta.\n\nSe você trocou de celular, toque em "⭐ Quero ser Pro" para reenviar o código deste aparelho novo.');
+    return false;
+  }
   if ((currentUserAccount.reportsThisMonth || 0) >= FREE_REPORT_LIMIT) {
     alert(`Você já usou seus ${FREE_REPORT_LIMIT} relatórios grátis deste mês.\n\nToque em "⭐ Quero ser Pro" para liberar relatórios ilimitados.`);
     return false;
@@ -4506,7 +4551,8 @@ async function podeExigirCotaDeRelatorio() {
 async function registrarRelatorioCriado() {
   if (!CLOUD_SYNC_ENABLED || !cloudAuth || !currentUserUid || !currentUserAccount) return;
   currentUserAccount.reportsTotal = (currentUserAccount.reportsTotal || 0) + 1;
-  if (currentUserAccount.plan !== 'pro') {
+  const isAdmin = ADMIN_EMAILS.includes((currentUserAccount.email || '').toLowerCase());
+  if (!isAdmin && !contaEhProNesteAparelho(currentUserAccount)) {
     currentUserAccount.reportsThisMonth = (currentUserAccount.reportsThisMonth || 0) + 1;
   }
   renderAccountStatus();
@@ -4566,7 +4612,7 @@ if (CLOUD_SYNC_ENABLED && cloudAuth) {
   });
   document.getElementById('btn-upgrade-pro').addEventListener('click', () => {
     const email = (currentUserAccount && currentUserAccount.email) || '';
-    const msg = encodeURIComponent(`Olá! Quero assinar o plano Pro do Fotoprova. Meu e-mail de login é: ${email}`);
+    const msg = encodeURIComponent(`Olá! Quero assinar o plano Pro do Fotoprova.\nMeu e-mail de login é: ${email}\nCódigo deste aparelho: ${CURRENT_DEVICE_ID}`);
     // Número de WhatsApp de vendas — atualizado.
     window.open(`https://wa.me/5586999151041?text=${msg}`, '_blank');
   });
@@ -4620,15 +4666,31 @@ if (CLOUD_SYNC_ENABLED && cloudAuth) {
     }
     listEl.innerHTML = resumoHtml + filtrados.map((u) => {
       const isPro = u.plan === 'pro';
+      const vinculado = !!u.authorizedDeviceId;
+      const bateComVisto = vinculado && u.lastSeenDeviceId && u.authorizedDeviceId === u.lastSeenDeviceId;
       return `
-        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; padding:10px 0; border-bottom:1px solid var(--cinza-borda);">
-          <div>
-            <div style="font-weight:600; font-size:0.88rem;">${(u.email || u.uid).replace(/</g, '&lt;')}</div>
-            <div style="font-size:0.78rem; color:var(--texto-suave);">Plano: ${isPro ? 'Pro ⭐' : 'Grátis'} — ${u.reportsThisMonth || 0} este mês · ${u.reportsTotal || 0} no total</div>
+        <div style="padding:10px 0; border-bottom:1px solid var(--cinza-borda);">
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+            <div>
+              <div style="font-weight:600; font-size:0.88rem;">${(u.email || u.uid).replace(/</g, '&lt;')}</div>
+              <div style="font-size:0.78rem; color:var(--texto-suave);">Plano: ${isPro ? 'Pro ⭐' : 'Grátis'} — ${u.reportsThisMonth || 0} este mês · ${u.reportsTotal || 0} no total</div>
+            </div>
+            <button class="btn ${isPro ? 'ghost' : 'gold'} admin-toggle-plan" data-uid="${u.uid}" data-newplan="${isPro ? 'free' : 'pro'}" style="min-height:32px; padding:6px 10px; white-space:nowrap;">
+              ${isPro ? 'Tornar Grátis' : 'Tornar Pro'}
+            </button>
           </div>
-          <button class="btn ${isPro ? 'ghost' : 'gold'} admin-toggle-plan" data-uid="${u.uid}" data-newplan="${isPro ? 'free' : 'pro'}" style="min-height:32px; padding:6px 10px; white-space:nowrap;">
-            ${isPro ? 'Tornar Grátis' : 'Tornar Pro'}
-          </button>
+          <div style="margin-top:8px; padding:8px; background:var(--cinza-bg); border-radius:6px; font-size:0.76rem;">
+            <div style="color:var(--texto-suave); margin-bottom:4px;">
+              Último aparelho visto: <strong>${u.lastSeenDeviceId || '—'}</strong>
+              ${bateComVisto ? ' ✅ (já é o vinculado)' : ''}
+            </div>
+            <div style="display:flex; gap:6px; align-items:center;">
+              <input type="text" class="admin-device-input" data-uid="${u.uid}" placeholder="Código do aparelho autorizado" value="${u.authorizedDeviceId || ''}" style="flex:1; min-height:32px; padding:4px 8px; font-size:0.78rem;">
+              <button class="btn ghost admin-save-device" data-uid="${u.uid}" style="min-height:32px; padding:6px 10px; white-space:nowrap;">Vincular</button>
+              ${vinculado ? `<button class="btn red admin-clear-device" data-uid="${u.uid}" style="min-height:32px; padding:6px 10px; white-space:nowrap;">Limpar</button>` : ''}
+            </div>
+            <div style="color:var(--texto-suave); margin-top:4px;">Sem código vinculado, o Pro vale em qualquer aparelho que essa conta logar.</div>
+          </div>
         </div>`;
     }).join('');
     listEl.querySelectorAll('.admin-toggle-plan').forEach((btn) => {
@@ -4645,6 +4707,42 @@ if (CLOUD_SYNC_ENABLED && cloudAuth) {
           if (uid === currentUserUid) { currentUserAccount.plan = newPlan; renderAccountStatus(); }
         } catch (e) {
           alert('Não consegui salvar: ' + e.message);
+          btn.disabled = false;
+        }
+      });
+    });
+    listEl.querySelectorAll('.admin-save-device').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const uid = btn.dataset.uid;
+        const input = listEl.querySelector(`.admin-device-input[data-uid="${uid}"]`);
+        const codigo = (input.value || '').trim().toUpperCase();
+        if (!codigo) { alert('Digite o código do aparelho antes de vincular.'); return; }
+        btn.disabled = true;
+        try {
+          await cloudDb.collection('users').doc(uid).update({ authorizedDeviceId: codigo });
+          const u = adminUsersCache.find((x) => x.uid === uid);
+          if (u) u.authorizedDeviceId = codigo;
+          renderizarListaAdmin();
+          if (uid === currentUserUid) { currentUserAccount.authorizedDeviceId = codigo; renderAccountStatus(); }
+        } catch (e) {
+          alert('Não consegui vincular: ' + e.message);
+          btn.disabled = false;
+        }
+      });
+    });
+    listEl.querySelectorAll('.admin-clear-device').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const uid = btn.dataset.uid;
+        if (!confirm('Remover o vínculo de aparelho desta conta? O Pro passa a valer em qualquer aparelho.')) return;
+        btn.disabled = true;
+        try {
+          await cloudDb.collection('users').doc(uid).update({ authorizedDeviceId: null });
+          const u = adminUsersCache.find((x) => x.uid === uid);
+          if (u) u.authorizedDeviceId = null;
+          renderizarListaAdmin();
+          if (uid === currentUserUid) { currentUserAccount.authorizedDeviceId = null; renderAccountStatus(); }
+        } catch (e) {
+          alert('Não consegui remover: ' + e.message);
           btn.disabled = false;
         }
       });
