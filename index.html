@@ -996,8 +996,8 @@ svg.leaflet-image-layer.leaflet-interactive path {
         <div style="opacity:0.75; font-size:0.9rem;">Relatório fotográfico de campo</div>
       </div>
       <div id="auth-tabs" style="display:flex; gap:8px; margin-bottom:16px;">
-        <button class="btn ghost" id="auth-tab-login" style="flex:1; color:#fff; border-color:#4a6fa5;">Entrar</button>
-        <button class="btn ghost" id="auth-tab-signup" style="flex:1; color:#fff; border-color:#4a6fa5;">Criar conta</button>
+        <button class="btn ghost" id="auth-tab-login" style="flex:1; color:#fff; background:transparent; border-color:#4a6fa5;">Entrar</button>
+        <button class="btn ghost" id="auth-tab-signup" style="flex:1; color:#fff; background:transparent; border-color:#4a6fa5;">Criar conta</button>
       </div>
       <label class="field-label" style="color:#dce6f5;">E-mail</label>
       <input type="email" id="auth-email" placeholder="seuemail@exemplo.com" autocomplete="email">
@@ -1006,7 +1006,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
       <div id="auth-error" style="color:#ffb3b3; font-size:0.85rem; margin-top:6px; display:none;"></div>
       <button class="btn full gold" id="auth-submit" style="margin-top:14px;">Entrar</button>
       <div style="text-align:center; margin:14px 0; opacity:0.6; font-size:0.8rem;">— ou —</div>
-      <button class="btn full ghost" id="auth-google" style="color:#fff; border-color:#4a6fa5;">🔎 Entrar com Google</button>
+      <button class="btn full ghost" id="auth-google" style="color:#fff; background:transparent; border-color:#4a6fa5;">🔎 Entrar com Google</button>
       <div class="hint" style="color:#b9c8e0; margin-top:18px;">Seus relatórios e fotos continuam salvos só neste aparelho. O login serve para controlar seu plano (Grátis/Pro) e a cota de relatórios por mês.</div>
     </div>
   </div>
@@ -4569,8 +4569,8 @@ async function registrarRelatorioCriado() {
 let authMode = 'login'; // 'login' | 'signup'
 function setAuthMode(mode) {
   authMode = mode;
-  document.getElementById('auth-tab-login').style.background = mode === 'login' ? 'var(--verde)' : '';
-  document.getElementById('auth-tab-signup').style.background = mode === 'signup' ? 'var(--verde)' : '';
+  document.getElementById('auth-tab-login').style.background = mode === 'login' ? 'var(--verde)' : 'transparent';
+  document.getElementById('auth-tab-signup').style.background = mode === 'signup' ? 'var(--verde)' : 'transparent';
   document.getElementById('auth-submit').textContent = mode === 'login' ? 'Entrar' : 'Criar conta';
   document.getElementById('auth-error').style.display = 'none';
 }
