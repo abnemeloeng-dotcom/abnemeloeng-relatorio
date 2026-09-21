@@ -4460,6 +4460,64 @@ function getOrCreateDeviceId() {
 }
 const CURRENT_DEVICE_ID = getOrCreateDeviceId();
 
+// Logo oficial do app (marca Fotoprova), embutida como imagem para ser
+// desenhada sempre no canto superior ESQUERDO de toda foto/vídeo gerado
+// pelo app (relatório e evidência avulsa) — identifica a origem do
+// arquivo independentemente da logo da empresa (que fica no canto
+// direito, configurável em ⚙️ Cabeçalho).
+const FOTOPROVA_MARK_DATA_URL = 'data:image/png;base64,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';
+let fotoprovaMarkImg = null;
+function getFotoprovaMarkImg() {
+  if (fotoprovaMarkImg) return Promise.resolve(fotoprovaMarkImg);
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => { fotoprovaMarkImg = img; resolve(img); };
+    img.onerror = () => resolve(null);
+    img.src = FOTOPROVA_MARK_DATA_URL;
+  });
+}
+// Desenha a marca do Fotoprova no canto superior esquerdo do canvas —
+// síncrona (a imagem já deve ter sido pré-carregada com getFotoprovaMarkImg()).
+function drawFotoprovaMark(canvas) {
+  if (!fotoprovaMarkImg) return;
+  const ctx = canvas.getContext('2d');
+  const pad = Math.max(8, canvas.width * 0.02);
+  const size = Math.max(28, canvas.width * 0.07);
+  ctx.save();
+  ctx.globalAlpha = 0.9;
+  ctx.drawImage(fotoprovaMarkImg, pad, pad, size, size);
+  ctx.restore();
+}
+
+// ------------------------------------------------------------------
+// Cidade a partir da coordenada (geocodificação reversa via Nominatim/
+// OpenStreetMap), usada para completar a marca d'água de localização.
+// Tem cache simples por coordenada arredondada, pra não repetir pedidos
+// à toa, e nunca trava a foto/vídeo se a internet falhar.
+// ------------------------------------------------------------------
+const cidadePorCoordCache = {};
+async function buscarCidadePorCoordenada(lat, lon) {
+  const chave = lat.toFixed(3) + ',' + lon.toFixed(3);
+  if (cidadePorCoordCache[chave] !== undefined) return cidadePorCoordCache[chave];
+  try {
+    const url = 'https://nominatim.openstreetmap.org/reverse?format=json&lat=' + lat + '&lon=' + lon + '&zoom=10&addressdetails=1';
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4000);
+    const res = await fetch(url, { signal: controller.signal, headers: { 'Accept-Language': 'pt-BR' } });
+    clearTimeout(timer);
+    const data = await res.json();
+    const a = data && data.address ? data.address : {};
+    const cidade = a.city || a.town || a.village || a.municipality || a.county || null;
+    const uf = a.state_code || (a.state ? a.state.slice(0, 2).toUpperCase() : '');
+    const texto = cidade ? (uf ? (cidade + ' - ' + uf) : cidade) : null;
+    cidadePorCoordCache[chave] = texto;
+    return texto;
+  } catch (e) {
+    cidadePorCoordCache[chave] = null;
+    return null;
+  }
+}
+
 // Uma conta só é tratada como Pro DE FATO neste aparelho se: o plano é
 // "pro" E (ainda não há aparelho vinculado, OU o vinculado é este). Um
 // plano "pro" vinculado a outro aparelho aparece como Grátis aqui.
@@ -6112,7 +6170,7 @@ function baixarTileDeMapa(lat, lon, zoom) {
     } catch (e) { resolve(null); }
   });
 }
-function drawLocationWatermark(canvas, coord, dateObj, extraLines, mapTileImg) {
+function drawLocationWatermark(canvas, coord, dateObj, extraLines, mapTileImg, cidade) {
   const ctx = canvas.getContext('2d');
   const W = canvas.width, H = canvas.height;
   const pad = Math.max(8, W * 0.018);
@@ -6122,6 +6180,7 @@ function drawLocationWatermark(canvas, coord, dateObj, extraLines, mapTileImg) {
 
   const textLines = [];
   textLines.push(coord ? `${coord.lat.toFixed(6)}, ${coord.lng.toFixed(6)}` : 'Sem coordenada disponível');
+  if (cidade) textLines.push(cidade);
   textLines.push(dateObj.toLocaleDateString('pt-BR') + '  ' + dateObj.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
   (extraLines || []).forEach((l) => { if (l) textLines.push(l); });
 
@@ -6179,8 +6238,11 @@ function drawLocationWatermark(canvas, coord, dateObj, extraLines, mapTileImg) {
   ctx.strokeStyle = '#fff'; ctx.lineWidth = Math.max(1, W * 0.0015);
   ctx.beginPath(); ctx.arc(pinX, pinY - mapSize * 0.08, mapSize * 0.1, 0, Math.PI * 2); ctx.stroke();
 
+  // Texto alinhado embaixo do cartão (justificado na base), não mais
+  // centralizado verticalmente — fica mais parecido com apps de GPS/mapa.
   const textX = mapX + mapSize + innerPad;
-  let textY = boxY + (boxH - textLines.length * lineH) / 2 + fontSize * 0.9;
+  const blocoTextoH = textLines.length * lineH;
+  let textY = boxY + boxH - innerPad - blocoTextoH + fontSize * 0.9;
   ctx.fillStyle = '#fff';
   ctx.font = 'bold ' + fontSize + 'px sans-serif';
   textLines.forEach((l, i) => ctx.fillText(l, textX, textY + i * lineH));
@@ -6231,6 +6293,8 @@ async function processImage(img, coord, capturedAt, poleLabel, isBase) {
   // bem no armazenamento e nos relatórios, mantendo boa legibilidade.
   const workCanvas = resizeToCanvas(img, 1600);
   drawWatermark(workCanvas, [poleLabel + (isBase ? ' (pé do poste)' : ''), coordLine, dateStr]);
+  await getFotoprovaMarkImg();
+  drawFotoprovaMark(workCanvas); // marca do app no canto superior esquerdo, em toda foto do relatório
   let workDataUrl = workCanvas.toDataURL('image/jpeg', 0.85);
   workDataUrl = insertGpsExif(workDataUrl, coord, dateObj);
 
@@ -6699,11 +6763,15 @@ async function buildEvidenceStampedPhoto(img, coord, capturedAt, description) {
   const dateObj = new Date(capturedAt);
   const canvas = resizeToCanvas(img, 1600);
   let mapTileImg = null;
+  let cidade = null;
   if (coord) {
     try { mapTileImg = await baixarTileDeMapa(coord.lat, coord.lng, 17); } catch (e) { mapTileImg = null; }
+    try { cidade = await buscarCidadePorCoordenada(coord.lat, coord.lng); } catch (e) { cidade = null; }
   }
-  drawLocationWatermark(canvas, coord, dateObj, description ? [description] : [], mapTileImg);
+  await getFotoprovaMarkImg();
+  drawLocationWatermark(canvas, coord, dateObj, description ? [description] : [], mapTileImg, cidade);
   drawDiscreteCompanyMark(canvas);
+  drawFotoprovaMark(canvas);
   let dataUrl = canvas.toDataURL('image/jpeg', 0.9);
   dataUrl = insertGpsExif(dataUrl, coord, dateObj);
   return dataUrl;
@@ -6865,20 +6933,25 @@ document.getElementById('evidence-video-start').addEventListener('click', async 
   // uma vez só, e reaproveitado em todos os quadros do vídeo (evita
   // refazer isso 30x por segundo).
   evidenceState.videoMapTileImg = null;
+  evidenceState.videoCidade = null;
   if (evidenceState.recordCoord) {
     showSpinner('Carregando mapa da localização...');
     try { evidenceState.videoMapTileImg = await baixarTileDeMapa(evidenceState.recordCoord.lat, evidenceState.recordCoord.lng, 17); }
     catch (e) { evidenceState.videoMapTileImg = null; }
+    try { evidenceState.videoCidade = await buscarCidadePorCoordenada(evidenceState.recordCoord.lat, evidenceState.recordCoord.lng); }
+    catch (e) { evidenceState.videoCidade = null; }
   }
   if (!evidenceState.headerLogoImg && !evidenceState.headerCompanyName) await loadEvidenceHeaderInfo();
+  await getFotoprovaMarkImg();
   hideSpinner();
 
   const drawFrame = () => {
     ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
     const label = document.getElementById('evidence-video-label').value.trim() || 'Evidência de local';
     const now = new Date();
-    drawLocationWatermark(canvas, evidenceState.recordCoord, now, [label], evidenceState.videoMapTileImg);
+    drawLocationWatermark(canvas, evidenceState.recordCoord, now, [label], evidenceState.videoMapTileImg, evidenceState.videoCidade);
     drawDiscreteCompanyMark(canvas);
+    drawFotoprovaMark(canvas);
     evidenceState.overlayFrameId = requestAnimationFrame(drawFrame);
   };
   drawFrame();
