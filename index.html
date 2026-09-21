@@ -4392,6 +4392,12 @@ if (CLOUD_SYNC_ENABLED) {
     firebase.initializeApp(CLOUD_CONFIG);
     cloudDb = firebase.firestore();
     cloudAuth = firebase.auth();
+    // Guarda uma cópia local (IndexedDB do próprio Firestore) dos últimos
+    // dados lidos da nuvem — essencial para o app continuar funcionando
+    // se o celular reiniciar ou ficar sem internet bem no momento do login.
+    cloudDb.enablePersistence({ synchronizeTabs: true }).catch((e) => {
+      console.warn('Cache offline do Firestore não disponível neste navegador (não é crítico):', e.code);
+    });
   } catch (e) {
     console.warn('Não foi possível iniciar a sincronização em nuvem:', e);
   }
@@ -4545,31 +4551,63 @@ function currentMonthKey() {
 // Chamado assim que sabemos quem está logado: busca (ou cria, se for a
 // primeira vez) o documento da conta no Firestore, e zera a cota se o mês
 // virou desde a última vez que essa conta foi usada.
+// Corre uma Promise contra um prazo máximo — se a nuvem não responder a
+// tempo (por exemplo, sem internet), cai no "timeout" em vez de travar o
+// app esperando pra sempre. Essencial pra login continuar funcionando
+// offline depois que o celular reinicia sem sinal.
+function withTimeout(promise, ms) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error('tempo esgotado')), ms)),
+  ]);
+}
 async function onUserLoggedIn(user) {
   currentUserUid = user.uid;
   const ref = cloudDb.collection('users').doc(user.uid);
-  let data = null;
-  try {
-    const snap = await ref.get();
-    if (snap.exists) data = snap.data();
-  } catch (e) {
-    console.warn('Falha ao ler dados da conta (tratando como grátis, sem bloquear o uso):', e);
-  }
   const monthKey = currentMonthKey();
+  const cacheKey = 'fotoprova_account_' + user.uid;
+  let data = null;
+  let onlineOk = false;
+  try {
+    const snap = await withTimeout(ref.get(), 5000);
+    if (snap.exists) data = snap.data();
+    onlineOk = true;
+  } catch (e) {
+    console.warn('Não consegui confirmar a conta agora (provavelmente sem internet) — usando a última cópia salva neste aparelho:', e.message);
+  }
+
+  if (onlineOk && data) {
+    // Guarda uma cópia local pra usar se, numa próxima vez, o aparelho
+    // estiver sem internet bem no momento do login.
+    try { localStorage.setItem(cacheKey, JSON.stringify(data)); } catch (e) { /* não crítico */ }
+  } else if (!data) {
+    try {
+      const cached = localStorage.getItem(cacheKey);
+      if (cached) { data = JSON.parse(cached); mostrarToast('📶 Sem conexão — usando os dados de plano salvos neste aparelho', 'aviso'); }
+    } catch (e) { /* segue sem cache */ }
+  }
+
   if (!data) {
+    // Nunca vimos essa conta (nem na nuvem, nem em cache local neste
+    // aparelho) — assume Grátis por padrão; só grava na nuvem se
+    // realmente estivermos online agora.
     data = { email: user.email || '', plan: 'free', reportsThisMonth: 0, reportsTotal: 0, monthKey, createdAt: Date.now(), authorizedDeviceId: null, lastSeenDeviceId: CURRENT_DEVICE_ID };
-    try { await ref.set(data); } catch (e) { console.warn('Falha ao criar conta no banco:', e); }
+    if (onlineOk) {
+      try { await withTimeout(ref.set(data), 5000); } catch (e) { console.warn('Falha ao criar conta no banco:', e); }
+    }
   } else if (data.monthKey !== monthKey) {
     data.monthKey = monthKey;
     data.reportsThisMonth = 0;
-    try { await ref.update({ monthKey, reportsThisMonth: 0 }); } catch (e) { /* segue mesmo se falhar */ }
+    if (onlineOk) {
+      try { await withTimeout(ref.update({ monthKey, reportsThisMonth: 0 }), 5000); } catch (e) { /* segue mesmo se falhar */ }
+    }
   }
   if (data.reportsTotal === undefined) data.reportsTotal = data.reportsThisMonth || 0; // conta antiga, sem esse campo ainda
   // Atualiza qual foi o último aparelho a logar nesta conta (visível pro admin,
   // não muda sozinho o aparelho autorizado — isso só o admin decide).
-  if (data.lastSeenDeviceId !== CURRENT_DEVICE_ID) {
+  if (onlineOk && data.lastSeenDeviceId !== CURRENT_DEVICE_ID) {
     data.lastSeenDeviceId = CURRENT_DEVICE_ID;
-    try { await ref.update({ lastSeenDeviceId: CURRENT_DEVICE_ID }); } catch (e) { /* não crítico */ }
+    try { await withTimeout(ref.update({ lastSeenDeviceId: CURRENT_DEVICE_ID }), 5000); } catch (e) { /* não crítico */ }
   }
   currentUserAccount = data;
   renderAccountStatus();
