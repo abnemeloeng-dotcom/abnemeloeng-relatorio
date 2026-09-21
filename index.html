@@ -1032,6 +1032,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
       <button class="btn ghost full" id="btn-select-local-folder">📁 Escolher pasta no disco</button>
       <button class="btn ghost full" id="btn-gps-diag">🛰️ Testar GPS deste aparelho</button>
       <button class="btn ghost full" id="btn-evidence-capture">📍 Foto/vídeo avulsa de um local (não entra em nenhum relatório)</button>
+      <button class="btn ghost full" id="btn-cloud-drive-interesse">☁️ Backup automático no seu Google Drive (em breve — toque para manifestar interesse)</button>
       <div class="hint" id="local-folder-status" style="margin-top:8px;">Nenhuma pasta local selecionada. Ao criar um relatório, o sistema poderá pedir uma pasta principal para criar a estrutura automaticamente.</div>
     </div>
     <div class="card">
@@ -1328,6 +1329,11 @@ svg.leaflet-image-layer.leaflet-interactive path {
       <button class="btn gold" style="flex:1;" id="evidence-mode-video">🎥 Vídeo</button>
     </div>
 
+    <div id="evidence-opacity-wrap" style="margin-bottom:10px;">
+      <label class="field-label" style="margin-bottom:2px;">🎨 Opacidade do fundo da marca d'água</label>
+      <input type="range" id="evidence-opacity-slider" min="0.2" max="1" step="0.05" value="0.7" style="width:100%;">
+    </div>
+
     <!-- modo foto -->
     <div id="evidence-photo-area" style="display:none;">
       <input type="file" accept="image/*" capture="environment" id="evidence-camera-input" style="display:none;">
@@ -1344,6 +1350,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
           <button class="btn ghost" id="evidence-photo-share">📤 Compartilhar</button>
           <button class="btn red" id="evidence-photo-discard">🗑️ Descartar</button>
         </div>
+        <button class="btn ghost full" id="evidence-photo-download-raw" style="margin-top:8px;">💾 Baixar também sem marca d'água (original)</button>
       </div>
     </div>
 
@@ -1353,6 +1360,10 @@ svg.leaflet-image-layer.leaflet-interactive path {
       <input type="text" id="evidence-video-label" placeholder="Ex: Entrada do canteiro, poste em frente ao nº 45...">
       <div class="hint" id="evidence-video-hint">A câmera abaixo já mostra a coordenada e a hora sendo gravadas em tempo real na própria imagem.</div>
       <video id="evidence-video-live" autoplay playsinline muted style="width:100%; border-radius:8px; background:#000;"></video>
+      <div id="evidence-zoom-wrap" style="display:none; margin-top:8px;">
+        <label class="field-label" style="margin-bottom:2px;">🔍 Zoom</label>
+        <input type="range" id="evidence-zoom-slider" min="1" max="1" step="0.1" value="1" style="width:100%;">
+      </div>
       <canvas id="evidence-video-canvas" style="display:none;"></canvas>
       <div class="row-actions" style="margin-top:8px;">
         <button class="btn full gold" id="evidence-video-start">⏺️ Iniciar gravação</button>
@@ -4918,6 +4929,28 @@ function hideSpinner() {
   document.getElementById('spinner').classList.remove('show');
 }
 
+// ------------------------------------------------------------------
+// Aviso rápido de confirmação (toast) — usado sempre que uma ação
+// silenciosa (salvar, baixar, compartilhar) precisa deixar claro pro
+// usuário que "deu certo", sem precisar de um alerta que exige toque
+// pra fechar. Some sozinho depois de alguns segundos.
+// ------------------------------------------------------------------
+let toastTimer = null;
+function mostrarToast(mensagem, tipo) {
+  let el = document.getElementById('app-toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'app-toast';
+    el.style.cssText = 'position:fixed; left:50%; bottom:26px; transform:translateX(-50%); z-index:99999; max-width:92vw; padding:12px 18px; border-radius:10px; font-size:0.9rem; font-weight:600; color:#fff; box-shadow:0 4px 14px rgba(0,0,0,0.3); text-align:center; opacity:0; transition:opacity 0.25s ease; pointer-events:none;';
+    document.body.appendChild(el);
+  }
+  el.style.background = tipo === 'erro' ? 'var(--vermelho)' : (tipo === 'aviso' ? 'var(--laranja)' : 'var(--verde)');
+  el.textContent = mensagem;
+  el.style.opacity = '1';
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.style.opacity = '0'; }, 2600);
+}
+
 // ============================================================
 // Navegação entre telas
 // ============================================================
@@ -5427,6 +5460,7 @@ const annotateState = {
   drawing: false,
   current: null, // shape em andamento (preview)
   dragging: null, // { shape, orig } — anotação sendo arrastada com a ferramenta "mover"
+  resizingText: null, // { shape, orig } — texto sendo redimensionado pela alcinha do canto
 };
 const ANNOTATE_COLORS = ['#ff3b30', '#ffcc00', '#34c759', '#0a84ff', '#ffffff', '#111111'];
 
@@ -5634,6 +5668,27 @@ function annotateShapeBBox(s, scale) {
     maxY: Math.max(s.y1, s.y2) + pad,
   };
 }
+// Canto inferior direito de uma caixa de texto — é onde fica a "alcinha"
+// de redimensionar (arrastar esse ponto aumenta/diminui o tamanho da
+// fonte daquele texto especificamente, sem afetar o slider global).
+function annotateTextHandlePos(s, scale) {
+  const fontSize = (s.fontSize || 28) * scale;
+  const approxW = (s.text ? s.text.length : 1) * fontSize * 0.6;
+  return { x: s.x + approxW, y: s.y };
+}
+// Acha uma anotação de texto cuja "alcinha" de redimensionar está perto do
+// ponto tocado (procura de cima pra baixo, igual ao hit-test de mover).
+function annotateHitTestTextHandle(x, y, scale) {
+  const shapes = annotateState.shapes;
+  const raio = Math.max(22, scale * 12);
+  for (let i = shapes.length - 1; i >= 0; i--) {
+    const s = shapes[i];
+    if (s.type !== 'text') continue;
+    const h = annotateTextHandlePos(s, scale);
+    if (Math.hypot(x - h.x, y - h.y) <= raio) return s;
+  }
+  return null;
+}
 // Procura a anotação mais "de cima" (desenhada por último) que contém o
 // ponto tocado, para começar a arrastá-la.
 function annotateHitTest(x, y, scale) {
@@ -5665,6 +5720,24 @@ function annotateRedraw() {
   const scale = canvas.width / 800; // referência p/ espessura de linha e fonte proporcional
   shapes.forEach(s => annotateDrawShape(ctx, s, scale));
   if (current) annotateDrawShape(ctx, current, scale);
+  // Enquanto a ferramenta "mover" estiver ativa, desenha um pontinho na
+  // alcinha de cada texto, pra indicar que dá pra arrastar dali pra
+  // redimensionar a fonte daquele texto especificamente.
+  if (annotateState.tool === 'move') {
+    ctx.save();
+    shapes.forEach((s) => {
+      if (s.type !== 'text') return;
+      const h = annotateTextHandlePos(s, scale);
+      ctx.fillStyle = '#fff';
+      ctx.strokeStyle = '#1a3a5c';
+      ctx.lineWidth = Math.max(1.5, scale * 0.6);
+      ctx.beginPath();
+      ctx.arc(h.x, h.y, Math.max(7, scale * 3.5), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    });
+    ctx.restore();
+  }
 }
 
 (function wireAnnotateCanvasEvents() {
@@ -5676,6 +5749,11 @@ function annotateRedraw() {
     const tool = annotateState.tool;
     const scale = annotateState.canvas.width / 800;
     if (tool === 'move') {
+      const alvoResize = annotateHitTestTextHandle(p.x, p.y, scale);
+      if (alvoResize) {
+        annotateState.resizingText = { shape: alvoResize, orig: JSON.parse(JSON.stringify(alvoResize)), startX: p.x, startY: p.y };
+        return;
+      }
       const hit = annotateHitTest(p.x, p.y, scale);
       if (hit) {
         annotateState.dragging = { shape: hit, orig: JSON.parse(JSON.stringify(hit)), startX: p.x, startY: p.y };
@@ -5698,6 +5776,18 @@ function annotateRedraw() {
     }
   };
   const move = (ev) => {
+    if (annotateState.resizingText) {
+      ev.preventDefault();
+      const p = annotateCanvasPoint(ev);
+      const r = annotateState.resizingText;
+      const scale = annotateState.canvas.width / 800;
+      const origApproxW = ((r.orig.text ? r.orig.text.length : 1) * ((r.orig.fontSize || 28) * scale)) * 0.6;
+      const novaLargura = Math.max(10, origApproxW + (p.x - r.startX));
+      const fatorEscala = novaLargura / (origApproxW || 1);
+      r.shape.fontSize = Math.min(140, Math.max(10, (r.orig.fontSize || 28) * fatorEscala));
+      annotateRedraw();
+      return;
+    }
     if (annotateState.dragging) {
       ev.preventDefault();
       const p = annotateCanvasPoint(ev);
@@ -5715,6 +5805,10 @@ function annotateRedraw() {
     annotateRedraw();
   };
   const end = (ev) => {
+    if (annotateState.resizingText) {
+      annotateState.resizingText = null;
+      return;
+    }
     if (annotateState.dragging) {
       annotateState.dragging = null;
       return;
@@ -5804,6 +5898,7 @@ document.getElementById('annotate-save').addEventListener('click', async () => {
     document.getElementById('modal-annotate').classList.remove('show');
     hideSpinner();
     renderPoleScreen();
+    mostrarToast('✅ Anotações salvas');
   } catch (e) {
     hideSpinner();
     alert('Não consegui salvar as anotações: ' + e.message);
@@ -6170,13 +6265,14 @@ function baixarTileDeMapa(lat, lon, zoom) {
     } catch (e) { resolve(null); }
   });
 }
-function drawLocationWatermark(canvas, coord, dateObj, extraLines, mapTileImg, cidade) {
+function drawLocationWatermark(canvas, coord, dateObj, extraLines, mapTileImg, cidade, opacidadeFundo) {
   const ctx = canvas.getContext('2d');
   const W = canvas.width, H = canvas.height;
   const pad = Math.max(8, W * 0.018);
   const mapSize = Math.max(56, W * 0.16);
   const fontSize = Math.max(12, Math.round(W * 0.022));
   const lineH = fontSize * 1.4;
+  const alphaFundo = (opacidadeFundo === undefined || opacidadeFundo === null) ? 0.7 : opacidadeFundo;
 
   const textLines = [];
   textLines.push(coord ? `${coord.lat.toFixed(6)}, ${coord.lng.toFixed(6)}` : 'Sem coordenada disponível');
@@ -6195,7 +6291,7 @@ function drawLocationWatermark(canvas, coord, dateObj, extraLines, mapTileImg, c
   const radius = Math.max(6, W * 0.008);
 
   ctx.save();
-  ctx.globalAlpha = 0.7;
+  ctx.globalAlpha = alphaFundo;
   ctx.fillStyle = '#000';
   ctx.beginPath();
   ctx.moveTo(boxX + radius, boxY);
@@ -6576,6 +6672,11 @@ document.getElementById('modal-caption-save').addEventListener('click', async ()
   document.getElementById('modal-caption').classList.remove('show');
   state.pendingCapture = null;
   renderPoleScreen();
+  mostrarToast('✅ Foto salva');
+  // Abre o editor de anotações direto na sequência — pra marcar seta/texto
+  // já aproveitando que a foto acabou de ser tirada, sem precisar procurar
+  // ela depois na grade de fotos e abrir de novo.
+  openAnnotateEditor(photo.id);
 });
 
 function escapeHtml(s) {
@@ -6769,7 +6870,8 @@ async function buildEvidenceStampedPhoto(img, coord, capturedAt, description) {
     try { cidade = await buscarCidadePorCoordenada(coord.lat, coord.lng); } catch (e) { cidade = null; }
   }
   await getFotoprovaMarkImg();
-  drawLocationWatermark(canvas, coord, dateObj, description ? [description] : [], mapTileImg, cidade);
+  const opacidade = parseFloat(document.getElementById('evidence-opacity-slider').value);
+  drawLocationWatermark(canvas, coord, dateObj, description ? [description] : [], mapTileImg, cidade, opacidade);
   drawDiscreteCompanyMark(canvas);
   drawFotoprovaMark(canvas);
   let dataUrl = canvas.toDataURL('image/jpeg', 0.9);
@@ -6801,12 +6903,18 @@ function stopEvidenceCamera() {
     evidenceState.mediaStream.getTracks().forEach(t => t.stop());
     evidenceState.mediaStream = null;
   }
+  document.getElementById('evidence-zoom-wrap').style.display = 'none';
 }
 function closeEvidenceModal() {
   stopEvidenceCamera();
   document.getElementById('modal-evidence').classList.remove('show');
 }
 document.getElementById('btn-evidence-capture').addEventListener('click', openEvidenceModal);
+document.getElementById('btn-cloud-drive-interesse').addEventListener('click', () => {
+  const email = (currentUserAccount && currentUserAccount.email) || '';
+  const msg = encodeURIComponent(`Olá! Tenho interesse no backup automático das fotos do Fotoprova no meu Google Drive.${email ? '\nMeu e-mail de login é: ' + email : ''}`);
+  window.open(`https://wa.me/5586999151041?text=${msg}`, '_blank');
+});
 document.getElementById('evidence-close').addEventListener('click', closeEvidenceModal);
 
 document.getElementById('evidence-mode-photo').addEventListener('click', () => {
@@ -6847,6 +6955,7 @@ document.getElementById('evidence-camera-input').addEventListener('change', asyn
     // Garante que a logo/nome já foram carregados antes de carimbar.
     if (!evidenceState.headerLogoImg && !evidenceState.headerCompanyName) await loadEvidenceHeaderInfo();
     evidenceState.photoRawImg = img;
+    evidenceState.photoRawOriginalDataUrl = originalDataUrl; // cópia sem nenhum carimbo, como veio da câmera
     evidenceState.photoCoord = coord;
     evidenceState.photoCapturedAt = capturedAt;
     document.getElementById('evidence-photo-desc').value = '';
@@ -6875,6 +6984,7 @@ document.getElementById('evidence-photo-apply').addEventListener('click', async 
 document.getElementById('evidence-photo-discard').addEventListener('click', () => {
   evidenceState.photoDataUrl = null;
   evidenceState.photoRawImg = null;
+  evidenceState.photoRawOriginalDataUrl = null;
   document.getElementById('evidence-photo-preview-wrap').style.display = 'none';
 });
 document.getElementById('evidence-photo-download').addEventListener('click', () => {
@@ -6883,6 +6993,15 @@ document.getElementById('evidence-photo-download').addEventListener('click', () 
   a.href = evidenceState.photoDataUrl;
   a.download = 'evidencia_' + Date.now() + '.jpg';
   document.body.appendChild(a); a.click(); a.remove();
+  mostrarToast('✅ Foto baixada para o seu aparelho');
+});
+document.getElementById('evidence-photo-download-raw').addEventListener('click', () => {
+  if (!evidenceState.photoRawOriginalDataUrl) return;
+  const a = document.createElement('a');
+  a.href = evidenceState.photoRawOriginalDataUrl;
+  a.download = 'evidencia_original_sem_marca_' + Date.now() + '.jpg';
+  document.body.appendChild(a); a.click(); a.remove();
+  mostrarToast('✅ Original sem marca d\'água baixado');
 });
 document.getElementById('evidence-photo-share').addEventListener('click', async () => {
   if (!evidenceState.photoDataUrl) return;
@@ -6892,6 +7011,7 @@ document.getElementById('evidence-photo-share').addEventListener('click', async 
     const file = new File([blob], 'evidencia.jpg', { type: 'image/jpeg' });
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
       await navigator.share({ files: [file], title: 'Evidência de local' });
+      mostrarToast('✅ Compartilhado');
     } else {
       alert('Este navegador não permite compartilhar arquivo direto por aqui. Toque em "Baixar" e depois compartilhe pela galeria de fotos do celular.');
     }
@@ -6908,9 +7028,29 @@ async function startEvidenceCameraPreview() {
     evidenceState.mediaStream = stream;
     const videoEl = document.getElementById('evidence-video-live');
     videoEl.srcObject = stream;
+    configurarControleDeZoom(stream);
   } catch (e) {
     alert('Não consegui acessar a câmera para vídeo: ' + e.message + '\n\nVerifique se você deu permissão de câmera/microfone para este site nas configurações do navegador.');
   }
+}
+// Liga o slider de zoom às capacidades reais da câmera do aparelho
+// (nem todo navegador/celular expõe controle de zoom por software —
+// quando não expõe, o slider some, sem travar o resto da gravação).
+function configurarControleDeZoom(stream) {
+  const wrap = document.getElementById('evidence-zoom-wrap');
+  const slider = document.getElementById('evidence-zoom-slider');
+  const track = stream.getVideoTracks()[0];
+  if (!track || !track.getCapabilities) { wrap.style.display = 'none'; return; }
+  const caps = track.getCapabilities();
+  if (!caps.zoom) { wrap.style.display = 'none'; return; }
+  slider.min = caps.zoom.min;
+  slider.max = caps.zoom.max;
+  slider.step = caps.zoom.step || 0.1;
+  slider.value = track.getSettings().zoom || caps.zoom.min;
+  wrap.style.display = '';
+  slider.oninput = () => {
+    track.applyConstraints({ advanced: [{ zoom: parseFloat(slider.value) }] }).catch(() => {});
+  };
 }
 document.getElementById('evidence-video-start').addEventListener('click', async () => {
   if (!evidenceState.mediaStream) await startEvidenceCameraPreview();
@@ -6949,7 +7089,7 @@ document.getElementById('evidence-video-start').addEventListener('click', async 
     ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
     const label = document.getElementById('evidence-video-label').value.trim() || 'Evidência de local';
     const now = new Date();
-    drawLocationWatermark(canvas, evidenceState.recordCoord, now, [label], evidenceState.videoMapTileImg, evidenceState.videoCidade);
+    drawLocationWatermark(canvas, evidenceState.recordCoord, now, [label], evidenceState.videoMapTileImg, evidenceState.videoCidade, parseFloat(document.getElementById('evidence-opacity-slider').value));
     drawDiscreteCompanyMark(canvas);
     drawFotoprovaMark(canvas);
     evidenceState.overlayFrameId = requestAnimationFrame(drawFrame);
@@ -7009,6 +7149,7 @@ document.getElementById('evidence-video-download').addEventListener('click', () 
   a.href = evidenceState.videoBlobUrl;
   a.download = 'evidencia_' + Date.now() + '.webm';
   document.body.appendChild(a); a.click(); a.remove();
+  mostrarToast('✅ Vídeo baixado para o seu aparelho');
 });
 document.getElementById('evidence-video-share').addEventListener('click', async () => {
   if (!evidenceState.videoBlobUrl) return;
@@ -7018,6 +7159,7 @@ document.getElementById('evidence-video-share').addEventListener('click', async 
     const file = new File([blob], 'evidencia.webm', { type: 'video/webm' });
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
       await navigator.share({ files: [file], title: 'Evidência de local' });
+      mostrarToast('✅ Compartilhado');
     } else {
       alert('Este navegador não permite compartilhar arquivo direto por aqui. Toque em "Baixar" e depois compartilhe pela galeria do celular.');
     }
@@ -7369,6 +7511,7 @@ function forceDownload(blob, filename) {
   a.click();
   document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(url), 30000);
+  mostrarToast('✅ "' + filename + '" baixado para o seu aparelho');
 }
 async function shareBlob(blob, filename, mimeType, title) {
   // Tentativa 1: compartilhar o arquivo com o tipo MIME original (ex: application/zip).
@@ -7376,6 +7519,7 @@ async function shareBlob(blob, filename, mimeType, title) {
     const file = new File([blob], filename, { type: mimeType });
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
       await navigator.share({ files: [file], title: title || filename });
+      mostrarToast('✅ Compartilhado');
       return 'shared';
     }
   } catch (e) {
@@ -7389,6 +7533,7 @@ async function shareBlob(blob, filename, mimeType, title) {
     const genericFile = new File([blob], filename, { type: 'application/octet-stream' });
     if (navigator.canShare && navigator.canShare({ files: [genericFile] })) {
       await navigator.share({ files: [genericFile], title: title || filename });
+      mostrarToast('✅ Compartilhado');
       return 'shared';
     }
   } catch (e) {
@@ -7402,6 +7547,7 @@ async function shareBlob(blob, filename, mimeType, title) {
     try {
       const file = new File([blob], filename, { type: mimeType });
       await navigator.share({ files: [file], title: title || filename });
+      mostrarToast('✅ Compartilhado');
       return 'shared';
     } catch (e) {
       if (e && e.name === 'AbortError') return 'cancelled';
@@ -7412,6 +7558,7 @@ async function shareBlob(blob, filename, mimeType, title) {
     // a Web Share API mas não aceita arquivos deste tipo/tamanho de forma alguma.
     try {
       await navigator.share({ title: title || filename });
+      mostrarToast('✅ Compartilhado');
       return 'shared-no-file';
     } catch (e) {
       if (e && e.name === 'AbortError') return 'cancelled';
