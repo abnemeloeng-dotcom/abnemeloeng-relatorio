@@ -5633,7 +5633,10 @@ function annotateDrawShape(ctx, s, scale) {
   // campo caem no valor padrão 4, mantendo compatibilidade com anotações
   // feitas antes dessa opção existir.
   const thickness = s.thickness || 4;
-  ctx.lineWidth = Math.max(1, scale * 0.5 * (thickness / 4));
+  // Espessura proporcional ao tamanho real da imagem (não só ao valor do
+  // slider) — em fotos de alta resolução (~1600px), a linha precisa ser
+  // bem mais grossa do que pareceria "razoável" olhando só o número.
+  ctx.lineWidth = Math.max(2, scale * thickness * 0.6);
   ctx.lineCap = 'round'; ctx.lineJoin = 'round';
   if (s.type === 'pen') {
     if (!s.points || s.points.length < 2) return;
@@ -5689,10 +5692,11 @@ function annotateDrawShape(ctx, s, scale) {
 }
 function annotateDrawArrowLine(ctx, x1, y1, x2, y2, scale, doubleHead, thickness) {
   ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
-  // Ponta da seta proporcional à espessura escolhida, para não ficar
-  // "fininha" mesmo quando a linha está grossa.
+  // Ponta da seta bem maior, proporcional à espessura da linha (mesma
+  // lógica de escala usada em ctx.lineWidth acima) — precisa ser grande o
+  // bastante pra aparecer clara mesmo numa foto de 1600px de largura.
   const t = thickness || 4;
-  const headLen = Math.max(10, scale * 2.2 * (t / 4) + t * 2);
+  const headLen = Math.max(24, scale * t * 3);
   const ang = Math.atan2(y2 - y1, x2 - x1);
   const drawHead = (x, y, angle) => {
     ctx.beginPath();
