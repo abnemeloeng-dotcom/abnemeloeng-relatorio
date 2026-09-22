@@ -870,6 +870,10 @@ svg.leaflet-image-layer.leaflet-interactive path {
     display: none; align-items: flex-end; justify-content: center; z-index: 100;
   }
   .modal-overlay.show { display: flex; }
+  /* O editor de anotações pode ser aberto por cima de outro modal (ex: a
+     evidência avulsa), então precisa de um z-index maior pra não ficar
+     tampado por quem o abriu. */
+  #modal-annotate { z-index: 200; }
   .modal-box {
     background: #fff; border-radius: 16px 16px 0 0; width: 100%; max-width: 720px;
     max-height: 92vh; overflow-y: auto; padding: 18px 16px calc(18px + env(safe-area-inset-bottom));
@@ -1287,6 +1291,12 @@ svg.leaflet-image-layer.leaflet-interactive path {
     <input type="text" id="settings-responsible" placeholder="Ex: Abne Melo dos Santos">
 
     <div class="hint" style="margin-top:16px; border-top:1px solid var(--cinza-borda); padding-top:12px;">
+      🎨 Aparência da marca d'água de localização (usada na foto/vídeo avulsos de um local).
+    </div>
+    <label class="field-label">Opacidade do fundo da marca d'água</label>
+    <input type="range" id="settings-watermark-opacity" min="0.2" max="1" step="0.05" value="0.7" style="width:100%;">
+
+    <div class="hint" style="margin-top:16px; border-top:1px solid var(--cinza-borda); padding-top:12px;">
       📋 Cadastre aqui os municípios, equipes e supervisores usados na sua operação. Depois, na tela "Dados do relatório", basta escolher da lista em vez de digitar toda vez.
     </div>
 
@@ -1329,11 +1339,6 @@ svg.leaflet-image-layer.leaflet-interactive path {
       <button class="btn gold" style="flex:1;" id="evidence-mode-video">🎥 Vídeo</button>
     </div>
 
-    <div id="evidence-opacity-wrap" style="margin-bottom:10px;">
-      <label class="field-label" style="margin-bottom:2px;">🎨 Opacidade do fundo da marca d'água</label>
-      <input type="range" id="evidence-opacity-slider" min="0.2" max="1" step="0.05" value="0.7" style="width:100%;">
-    </div>
-
     <!-- modo foto -->
     <div id="evidence-photo-area" style="display:none;">
       <input type="file" accept="image/*" capture="environment" id="evidence-camera-input" style="display:none;">
@@ -1345,6 +1350,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
         <div class="row-actions" style="margin-top:8px;">
           <button class="btn gold full" id="evidence-photo-apply">✅ Aplicar descrição na foto</button>
         </div>
+        <button class="btn ghost full" id="evidence-photo-reannotate" style="margin-top:8px;">✏️ Anotar (seta, texto...)</button>
         <div class="row-actions" style="margin-top:8px;">
           <button class="btn green" id="evidence-photo-download">💾 Baixar</button>
           <button class="btn ghost" id="evidence-photo-share">📤 Compartilhar</button>
@@ -5499,6 +5505,7 @@ const annotateState = {
   current: null, // shape em andamento (preview)
   dragging: null, // { shape, orig } — anotação sendo arrastada com a ferramenta "mover"
   resizingText: null, // { shape, orig } — texto sendo redimensionado pela alcinha do canto
+  onSaveExternal: null, // callback(dataUrl, shapes, calibration) — usado pela evidência avulsa, que não tem registro no banco
 };
 const ANNOTATE_COLORS = ['#ff3b30', '#ffcc00', '#34c759', '#0a84ff', '#ffffff', '#111111'];
 
@@ -5569,11 +5576,27 @@ async function openAnnotateEditor(photoId) {
   const photo = await dbGet('photos', photoId);
   if (!photo) return;
   annotateState.photo = photo;
+  annotateState.onSaveExternal = null;
   // Preserva sempre a foto original intocada, para nunca perder qualidade
   // ao editar as anotações várias vezes.
   annotateState.originalDataUrl = photo.originalDataUrl || photo.workDataUrl;
   annotateState.shapes = photo.annotationShapes ? JSON.parse(JSON.stringify(photo.annotationShapes)) : [];
   annotateState.calibration = photo.annotationCalibration ? JSON.parse(JSON.stringify(photo.annotationCalibration)) : null;
+  abrirEditorDeAnotacoesComImagem(annotateState.originalDataUrl);
+}
+// Versão genérica do editor de anotações, para imagens que NÃO são uma
+// foto salva num relatório (photos/{id}) — usada pela evidência avulsa.
+// Ao salvar, chama "onSave(finalDataUrl, shapes, calibration)" em vez de
+// gravar no IndexedDB, e quem chamou decide o que fazer com o resultado.
+function openAnnotateEditorForDataUrl(dataUrl, existingShapes, existingCalibration, onSave) {
+  annotateState.photo = null;
+  annotateState.onSaveExternal = onSave;
+  annotateState.originalDataUrl = dataUrl;
+  annotateState.shapes = existingShapes ? JSON.parse(JSON.stringify(existingShapes)) : [];
+  annotateState.calibration = existingCalibration ? JSON.parse(JSON.stringify(existingCalibration)) : null;
+  abrirEditorDeAnotacoesComImagem(dataUrl);
+}
+function abrirEditorDeAnotacoesComImagem(dataUrl) {
   annotateState.tool = 'arrow';
   document.querySelectorAll('.annotate-tool[data-tool]').forEach(b => b.classList.toggle('active', b.dataset.tool === 'arrow'));
   annotateSetupColors();
@@ -5592,7 +5615,7 @@ async function openAnnotateEditor(photoId) {
     annotateRedraw();
     document.getElementById('modal-annotate').classList.add('show');
   };
-  img.src = annotateState.originalDataUrl;
+  img.src = dataUrl;
 }
 
 function annotateCanvasPoint(ev) {
@@ -5912,11 +5935,26 @@ document.getElementById('annotate-clear').addEventListener('click', () => {
 });
 document.getElementById('annotate-close').addEventListener('click', () => {
   document.getElementById('modal-annotate').classList.remove('show');
+  annotateState.onSaveExternal = null;
 });
 document.getElementById('annotate-cancel').addEventListener('click', () => {
   document.getElementById('modal-annotate').classList.remove('show');
+  annotateState.onSaveExternal = null;
 });
 document.getElementById('annotate-save').addEventListener('click', async () => {
+  if (annotateState.onSaveExternal) {
+    // Caso da evidência avulsa: não existe registro no banco — devolve o
+    // resultado pra quem abriu o editor decidir o que fazer.
+    const finalDataUrl = annotateState.canvas.toDataURL('image/jpeg', 0.9);
+    const callback = annotateState.onSaveExternal;
+    const shapes = annotateState.shapes;
+    const calibration = annotateState.calibration;
+    document.getElementById('modal-annotate').classList.remove('show');
+    annotateState.onSaveExternal = null;
+    mostrarToast('✅ Anotações aplicadas');
+    callback(finalDataUrl, shapes, calibration);
+    return;
+  }
   const photo = annotateState.photo;
   if (!photo) return;
   showSpinner('Salvando anotações...');
@@ -6797,6 +6835,7 @@ async function openSettingsModal() {
   document.getElementById('settings-company-name').value = s.companyName || '';
   document.getElementById('settings-company-address').value = s.address || '';
   document.getElementById('settings-responsible').value = s.responsible || '';
+  document.getElementById('settings-watermark-opacity').value = (s.watermarkOpacity === undefined || s.watermarkOpacity === null) ? 0.7 : s.watermarkOpacity;
   pendingLogoDataUrl = s.logoDataUrl || null;
   const preview = document.getElementById('settings-logo-preview');
   if (pendingLogoDataUrl) { preview.src = pendingLogoDataUrl; preview.style.display = ''; }
@@ -6836,19 +6875,27 @@ const evidenceState = {
   photoRawImg: null,       // <img> original, para poder re-carimbar ao aplicar a descrição
   photoCoord: null,
   photoCapturedAt: null,
+  photoAnnotationShapes: null,      // anotações (setas/textos) desenhadas na foto avulsa
+  photoAnnotationCalibration: null,
   videoBlobUrl: null,
   headerLogoImg: null,     // <img> da logo da empresa (carregada 1x ao abrir o modal)
   headerCompanyName: '',
 };
+// Opacidade do fundo da marca d'água de localização — configurada em
+// "⚙️ Cabeçalho" (não mais na tela de captura), carregada em cache aqui
+// pra não precisar reler o banco a cada quadro do vídeo.
+let currentWatermarkOpacity = 0.7;
 
 // Carrega a logo/nome cadastrados em "⚙️ Cabeçalho" para desenhar, discretamente,
-// no canto da foto avulsa (mesma logo usada nos relatórios).
+// no canto da foto avulsa (mesma logo usada nos relatórios), e a opacidade
+// da marca d'água configurada lá também.
 async function loadEvidenceHeaderInfo() {
   evidenceState.headerLogoImg = null;
   evidenceState.headerCompanyName = '';
   try {
     const settings = (await dbGet('settings', 'default')) || {};
     evidenceState.headerCompanyName = settings.companyName || '';
+    currentWatermarkOpacity = (settings.watermarkOpacity === undefined || settings.watermarkOpacity === null) ? 0.7 : settings.watermarkOpacity;
     if (settings.logoDataUrl) {
       evidenceState.headerLogoImg = await new Promise((resolve) => {
         const img = new Image();
@@ -6898,7 +6945,7 @@ function drawDiscreteCompanyMark(canvas) {
 // localização (mapinha + pino + coordenada/data + descrição) no canto
 // inferior esquerdo, e a logo/nome da empresa discretamente no canto
 // superior direito.
-async function buildEvidenceStampedPhoto(img, coord, capturedAt, description) {
+async function buildEvidenceStampedPhoto(img, coord, capturedAt, description, shapes) {
   const dateObj = new Date(capturedAt);
   const canvas = resizeToCanvas(img, 1600);
   let mapTileImg = null;
@@ -6908,10 +6955,17 @@ async function buildEvidenceStampedPhoto(img, coord, capturedAt, description) {
     try { cidade = await buscarCidadePorCoordenada(coord.lat, coord.lng); } catch (e) { cidade = null; }
   }
   await getFotoprovaMarkImg();
-  const opacidade = parseFloat(document.getElementById('evidence-opacity-slider').value);
-  drawLocationWatermark(canvas, coord, dateObj, description ? [description] : [], mapTileImg, cidade, opacidade);
+  drawLocationWatermark(canvas, coord, dateObj, description ? [description] : [], mapTileImg, cidade, currentWatermarkOpacity);
   drawDiscreteCompanyMark(canvas);
   drawFotoprovaMark(canvas);
+  // Redesenha por cima as anotações (seta/texto) feitas no editor, se houver
+  // — assim elas sobrevivem mesmo quando a descrição é alterada depois e a
+  // imagem precisa ser "recarimbada" do zero a partir do original.
+  if (shapes && shapes.length) {
+    const ctx = canvas.getContext('2d');
+    const scale = canvas.width / 800;
+    shapes.forEach((s) => annotateDrawShape(ctx, s, scale));
+  }
   let dataUrl = canvas.toDataURL('image/jpeg', 0.9);
   dataUrl = insertGpsExif(dataUrl, coord, dateObj);
   return dataUrl;
@@ -6990,21 +7044,28 @@ document.getElementById('evidence-camera-input').addEventListener('change', asyn
       }
     }
     const capturedAt = Date.now();
-    // Garante que a logo/nome já foram carregados antes de carimbar.
+    // Garante que a logo/nome/opacidade já foram carregados antes de carimbar.
     if (!evidenceState.headerLogoImg && !evidenceState.headerCompanyName) await loadEvidenceHeaderInfo();
     evidenceState.photoRawImg = img;
     evidenceState.photoRawOriginalDataUrl = originalDataUrl; // cópia sem nenhum carimbo, como veio da câmera
     evidenceState.photoCoord = coord;
     evidenceState.photoCapturedAt = capturedAt;
+    evidenceState.photoAnnotationShapes = null;
+    evidenceState.photoAnnotationCalibration = null;
     document.getElementById('evidence-photo-desc').value = '';
-    // Primeira versão: sem descrição ainda — o local pra descrever aparece
-    // logo abaixo da prévia, depois que a foto já foi tirada.
     showSpinner('Carregando mapa da localização...');
-    const dataUrl = await buildEvidenceStampedPhoto(img, coord, capturedAt, '');
-    evidenceState.photoDataUrl = dataUrl;
+    const baseDataUrl = await buildEvidenceStampedPhoto(img, coord, capturedAt, '');
     hideSpinner();
-    document.getElementById('evidence-photo-preview').src = dataUrl;
-    document.getElementById('evidence-photo-preview-wrap').style.display = '';
+    // Abre o editor de anotações NA HORA, aproveitando que a foto acabou de
+    // ser tirada — pra já apontar seta/texto em algo, em vez de precisar
+    // descartar e reabrir depois.
+    openAnnotateEditorForDataUrl(baseDataUrl, null, null, async (annotatedDataUrl, shapes, calibration) => {
+      evidenceState.photoAnnotationShapes = shapes;
+      evidenceState.photoAnnotationCalibration = calibration;
+      evidenceState.photoDataUrl = annotatedDataUrl;
+      document.getElementById('evidence-photo-preview').src = annotatedDataUrl;
+      document.getElementById('evidence-photo-preview-wrap').style.display = '';
+    });
   } catch (e) {
     hideSpinner();
     alert('Não consegui processar a foto: ' + e.message);
@@ -7014,10 +7075,26 @@ document.getElementById('evidence-photo-apply').addEventListener('click', async 
   if (!evidenceState.photoRawImg) return;
   const description = document.getElementById('evidence-photo-desc').value.trim();
   showSpinner('Atualizando foto...');
-  const dataUrl = await buildEvidenceStampedPhoto(evidenceState.photoRawImg, evidenceState.photoCoord, evidenceState.photoCapturedAt, description);
+  const dataUrl = await buildEvidenceStampedPhoto(evidenceState.photoRawImg, evidenceState.photoCoord, evidenceState.photoCapturedAt, description, evidenceState.photoAnnotationShapes);
   hideSpinner();
   evidenceState.photoDataUrl = dataUrl;
   document.getElementById('evidence-photo-preview').src = dataUrl;
+});
+document.getElementById('evidence-photo-reannotate').addEventListener('click', async () => {
+  if (!evidenceState.photoRawImg) return;
+  const description = document.getElementById('evidence-photo-desc').value.trim();
+  showSpinner('Preparando foto...');
+  // Reabre o editor sem as anotações antigas "queimadas" na imagem (senão
+  // ficariam duplicadas) — as anotações em si continuam guardadas à parte
+  // e são pré-carregadas no editor, prontas pra continuar editando.
+  const baseDataUrl = await buildEvidenceStampedPhoto(evidenceState.photoRawImg, evidenceState.photoCoord, evidenceState.photoCapturedAt, description, null);
+  hideSpinner();
+  openAnnotateEditorForDataUrl(baseDataUrl, evidenceState.photoAnnotationShapes, evidenceState.photoAnnotationCalibration, (annotatedDataUrl, shapes, calibration) => {
+    evidenceState.photoAnnotationShapes = shapes;
+    evidenceState.photoAnnotationCalibration = calibration;
+    evidenceState.photoDataUrl = annotatedDataUrl;
+    document.getElementById('evidence-photo-preview').src = annotatedDataUrl;
+  });
 });
 document.getElementById('evidence-photo-discard').addEventListener('click', () => {
   evidenceState.photoDataUrl = null;
@@ -7127,7 +7204,7 @@ document.getElementById('evidence-video-start').addEventListener('click', async 
     ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
     const label = document.getElementById('evidence-video-label').value.trim() || 'Evidência de local';
     const now = new Date();
-    drawLocationWatermark(canvas, evidenceState.recordCoord, now, [label], evidenceState.videoMapTileImg, evidenceState.videoCidade, parseFloat(document.getElementById('evidence-opacity-slider').value));
+    drawLocationWatermark(canvas, evidenceState.recordCoord, now, [label], evidenceState.videoMapTileImg, evidenceState.videoCidade, currentWatermarkOpacity);
     drawDiscreteCompanyMark(canvas);
     drawFotoprovaMark(canvas);
     evidenceState.overlayFrameId = requestAnimationFrame(drawFrame);
@@ -7222,13 +7299,14 @@ document.getElementById('modal-settings-save').addEventListener('click', async (
     companyName: document.getElementById('settings-company-name').value.trim(),
     address: document.getElementById('settings-company-address').value.trim(),
     responsible: document.getElementById('settings-responsible').value.trim(),
+    watermarkOpacity: parseFloat(document.getElementById('settings-watermark-opacity').value),
     logoDataUrl: pendingLogoDataUrl,
     municipios: pendingMunicipios.slice(),
     equipes: pendingEquipes.slice(),
     supervisores: pendingSupervisores.slice(),
   };
   await dbPut('settings', settings);
-
+  currentWatermarkOpacity = settings.watermarkOpacity; // aplica na hora, sem precisar reabrir a evidência avulsa
   const syncStatus = document.getElementById('settings-sync-status');
   if (CLOUD_SYNC_ENABLED) {
     syncStatus.style.display = '';
