@@ -1142,6 +1142,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
       <button class="annotate-tool" data-tool="text" title="Texto">🔤</button>
       <button class="annotate-tool" data-tool="scale" title="Calibrar escala: marque um objeto de tamanho conhecido">🎯</button>
       <button class="annotate-tool" data-tool="measure" title="Linha de medida (estimada pela escala calibrada)">📏</button>
+      <button class="annotate-tool" data-tool="distestimate" title="Estimar distância até um objeto: marque a altura real dele (ex: uma pessoa, uma porta) — dá uma ideia aproximada, não é medição a laser">📡</button>
       <button class="annotate-tool" id="annotate-undo" title="Desfazer">↩️</button>
       <button class="annotate-tool" id="annotate-clear" title="Limpar tudo">🗑️</button>
     </div>
@@ -5533,6 +5534,29 @@ function cmParaTexto(cm) {
   if (cm >= 100) return (cm / 100).toFixed(2).replace('.', ',') + ' m';
   return cm.toFixed(1).replace('.', ',') + ' cm';
 }
+// ------------------------------------------------------------------
+// Estimativa de distância câmera→objeto por fotogrametria simples: a
+// partir da altura REAL de um objeto conhecido e do quanto ele "ocupa"
+// em pixels na foto, calcula a distância aproximada até ele.
+//
+// IMPORTANTE — isso é uma ESTIMATIVA, não uma medição a laser:
+// - Assume um campo de visão vertical "típico" de câmera de celular
+//   (ASSUMED_VERTICAL_FOV_DEG). Câmeras variam bastante entre modelos
+//   (grande-angular, teleobjetiva, zoom aplicado na hora da foto) — cada
+//   uma disso muda o resultado de verdade, e não temos como saber qual
+//   foi usada a partir de uma foto vinda do app de câmera do aparelho.
+// - Assume que o objeto de referência está de frente pra câmera (não
+//   inclinado) e que a base dele está aproximadamente na mesma distância
+//   que o restante da cena de interesse.
+// Serve para dar uma NOÇÃO de distância em campo, não para laudo técnico
+// que exija precisão métrica.
+// ------------------------------------------------------------------
+const ASSUMED_VERTICAL_FOV_DEG = 55;
+function formatarDistanciaEstimada(m) {
+  if (m >= 1000) return (m / 1000).toFixed(2).replace('.', ',') + ' km';
+  if (m >= 10) return Math.round(m) + ' m';
+  return m.toFixed(1).replace('.', ',') + ' m';
+}
 function annotateAtualizarInfoEscala() {
   const el = document.getElementById('annotate-scale-info');
   if (!el) return;
@@ -5569,8 +5593,31 @@ document.querySelectorAll('.annotate-tool[data-tool]').forEach(btn => {
     annotateState.tool = btn.dataset.tool;
     document.querySelectorAll('.annotate-tool[data-tool]').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
+    if (btn.dataset.tool === 'distestimate') {
+      if (!distEstimateAvisoMostrado) {
+        distEstimateAvisoMostrado = true;
+        salvarPreferenciaLocal('fotoprova_dist_aviso_mostrado', true);
+        alert('📡 Estimativa de distância\n\nMarque a altura de um objeto que você sabe o tamanho real (uma pessoa ≈1,70m, uma porta ≈2m...).\n\n⚠️ Não use zoom na hora de tirar a foto — isso deixa a estimativa bem errada.\n\nÉ só uma noção aproximada da distância, não substitui medição a laser.');
+      } else {
+        mostrarToast('📡 Marque a altura real de um objeto conhecido — sem zoom na foto', 'aviso');
+      }
+    }
   });
 });
+// Preferências da ferramenta 📡 salvas permanentemente NESTE APARELHO
+// (localStorage) — sobrevivem a fechar o app e reabrir depois, diferente
+// de uma variável comum que se perderia a cada recarregamento.
+function lerPreferenciaLocal(chave, valorPadrao) {
+  try {
+    const v = localStorage.getItem(chave);
+    return v === null ? valorPadrao : JSON.parse(v);
+  } catch (e) { return valorPadrao; }
+}
+function salvarPreferenciaLocal(chave, valor) {
+  try { localStorage.setItem(chave, JSON.stringify(valor)); } catch (e) { /* não crítico */ }
+}
+let distEstimateAvisoMostrado = lerPreferenciaLocal('fotoprova_dist_aviso_mostrado', false);
+let distEstimateUltimaAlturaCm = lerPreferenciaLocal('fotoprova_dist_ultima_altura_cm', null);
 
 async function openAnnotateEditor(photoId) {
   const photo = await dbGet('photos', photoId);
@@ -5679,6 +5726,26 @@ function annotateDrawShape(ctx, s, scale) {
     ctx.fillRect(midX - w / 2 - 6, midY - fontSize - 4, w + 12, fontSize + 8);
     ctx.fillStyle = '#ffcc00';
     ctx.fillText(label, midX - w / 2, midY - 8);
+    ctx.fillStyle = s.color;
+  } else if (s.type === 'distestimate') {
+    ctx.save();
+    ctx.setLineDash([Math.max(6, scale * 1.5), Math.max(4, scale)]);
+    ctx.strokeStyle = '#00e5ff';
+    annotateDrawArrowLine(ctx, s.x1, s.y1, s.x2, s.y2, scale, true, thickness);
+    ctx.restore();
+    const midX = (s.x1 + s.x2) / 2, midY = (s.y1 + s.y2) / 2;
+    const fontSize = (s.fontSize || 28) * scale * 0.85;
+    const linha1 = '📡 ~' + formatarDistanciaEstimada(s.distanciaM) + ' (estimativa)';
+    const linha2 = 'Ref.: ' + s.alturaRealM.toFixed(2).replace('.', ',') + ' m';
+    ctx.font = 'bold ' + fontSize + 'px sans-serif';
+    const w = Math.max(ctx.measureText(linha1).width, ctx.measureText(linha2).width);
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(midX + 10, midY - fontSize * 2.3, w + 14, fontSize * 2.3 + 6);
+    ctx.fillStyle = '#00e5ff';
+    ctx.fillText(linha1, midX + 17, midY - fontSize * 1.35);
+    ctx.fillStyle = '#fff';
+    ctx.font = fontSize * 0.85 + 'px sans-serif';
+    ctx.fillText(linha2, midX + 17, midY - 6);
     ctx.fillStyle = s.color;
   } else if (s.type === 'text') {
     const fontSize = (s.fontSize || 28) * scale;
@@ -5894,6 +5961,25 @@ function annotateRedraw() {
       annotateAtualizarInfoEscala();
       annotateState.shapes.push(cur);
       annotateRedraw();
+      return;
+    }
+    if (cur.type === 'distestimate') {
+      const sugestaoAltura = distEstimateUltimaAlturaCm ? cmParaTexto(distEstimateUltimaAlturaCm) : '1,70 m';
+      const val = prompt('Marcou a ALTURA de um objeto de tamanho real conhecido (uma pessoa ≈1,70m, uma porta ≈2m, um carro ≈1,5m...). Qual a altura REAL dele?', sugestaoAltura);
+      const cm = parseDistanciaParaCm(val);
+      if (!cm) { annotateRedraw(); return; }
+      distEstimateUltimaAlturaCm = cm; // lembra pra sugerir de novo, permanentemente neste aparelho
+      salvarPreferenciaLocal('fotoprova_dist_ultima_altura_cm', cm);
+      const alturaRealM = cm / 100;
+      const canvasH = annotateState.canvas.height;
+      const fovVerticalRad = ASSUMED_VERTICAL_FOV_DEG * Math.PI / 180;
+      const focalLengthPx = canvasH / (2 * Math.tan(fovVerticalRad / 2));
+      const distanciaM = (alturaRealM * focalLengthPx) / pixelLen;
+      cur.alturaRealM = alturaRealM;
+      cur.distanciaM = distanciaM;
+      annotateState.shapes.push(cur);
+      annotateRedraw();
+      mostrarToast('📡 Distância estimada: ~' + formatarDistanciaEstimada(distanciaM) + ' (aproximado)', 'aviso');
       return;
     }
     if (cur.type === 'measure') {
