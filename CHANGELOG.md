@@ -1,4 +1,4 @@
-# Changelog — Fotoprova
+# Changelog — Revistec
 
 Todas as mudanças relevantes do projeto, da mais recente para a mais antiga.
 
@@ -8,10 +8,10 @@ Todas as mudanças relevantes do projeto, da mais recente para a mais antiga.
 - **Painel de administrador** dentro do app (`🛠️ Admin`): lista todas as contas com uso mensal e histórico total, e permite alternar qualquer conta entre Grátis/Pro direto pela interface, sem precisar do Firebase Console.
 - Contador de relatórios agora guarda também um total histórico (`reportsTotal`), além do contador mensal que reseta.
 
-## Rebranding — Fotoprova
+## Rebranding — Revistec
 - Novo nome, logo e paleta de marca (azul-marinho `#1a3a5c` + dourado `#b8863b`), reaproveitando as cores já usadas no app.
 - Ícone do app (`icon-192.png`, `icon-512.png`), `manifest.json` e Service Worker atualizados (cache `v2`) para refletir a nova marca — sem afetar dados de usuários já em teste.
-- Título da aba, tela de login e cabeçalho do app atualizados para "Fotoprova", mantendo o subtítulo original para continuidade com quem já usava o app.
+- Título da aba, tela de login e cabeçalho do app atualizados para "Revistec", mantendo o subtítulo original para continuidade com quem já usava o app.
 
 ## Contas, login e plano Grátis/Pro
 - Login por e-mail/senha e "Entrar com Google" (Firebase Authentication).

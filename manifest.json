@@ -1,7 +1,7 @@
 {
-  "name": "Fotoprova — Relatório Fotográfico de Campo",
-  "short_name": "Fotoprova",
-  "description": "Substitui câmera + KMZ + montagem manual do relatório fotográfico de campo.",
+  "name": "Revistec — Relatório de Visita Técnica",
+  "short_name": "Revistec",
+  "description": "Substitui câmera + KMZ + montagem manual do relatório de visita técnica.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

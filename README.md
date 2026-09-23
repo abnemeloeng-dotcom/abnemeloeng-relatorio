@@ -1,8 +1,8 @@
-# 📷 Fotoprova
+# 📷 Revistec
 
-**Relatório fotográfico de campo — substitui câmera + KMZ + montagem manual do relatório.**
+**Relatório de Visita Técnica — substitui câmera + KMZ + montagem manual do relatório.**
 
-Fotoprova é um aplicativo web (PWA) para equipes de campo — vistoria, fiscalização, manutenção de postes/redes, engenharia, construção civil — que precisam fotografar locais, anotar as fotos e gerar um relatório em PDF com coordenadas GPS, tudo direto do celular, sem depender de internet no momento da captura.
+Revistec é um aplicativo web (PWA) para equipes de campo — vistoria, fiscalização, manutenção de postes/redes, engenharia, construção civil — que precisam fotografar locais, anotar as fotos e gerar um relatório em PDF com coordenadas GPS, tudo direto do celular, sem depender de internet no momento da captura.
 
 > Funciona 100% offline depois da primeira visita. Não existe servidor: os relatórios e fotos ficam salvos apenas no aparelho de quem os criou.
 
@@ -55,7 +55,7 @@ Quando o GPS do navegador está disponível, ele é priorizado; há mecanismos a
 - **Painel de administrador** (visível só para o e-mail configurado em `ADMIN_EMAILS`): lista todas as contas cadastradas, com total de relatórios do mês e histórico geral, e um botão para alternar qualquer conta entre Grátis/Pro sem precisar abrir o Firebase Console.
 
 ### PWA / offline
-- Instalável na tela inicial do Android (ícone e nome próprios: **Fotoprova**).
+- Instalável na tela inicial do Android (ícone e nome próprios: **Revistec**).
 - Service Worker cacheia o app inteiro na primeira visita; funciona sem internet a partir daí.
 - Atualizações do app chegam sozinhas: abre com a versão salva na hora, baixa a versão nova por trás, e ela aparece na abertura seguinte.
 
@@ -141,4 +141,4 @@ O botão "⭐ Quero ser Pro" abre uma conversa de WhatsApp pré-preenchida com o
 
 ## 📜 Licença e uso
 
-Projeto de uso interno/comercial da Fotoprova. Direitos reservados ao autor do repositório.
+Projeto de uso interno/comercial da Revistec. Direitos reservados ao autor do repositório.
