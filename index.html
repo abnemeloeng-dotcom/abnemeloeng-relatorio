@@ -1074,8 +1074,10 @@ svg.leaflet-image-layer.leaflet-interactive path {
         <button class="btn ghost" id="btn-gen-kmz">🗺️ Gerar KMZ</button>
         <button class="btn ghost" id="btn-gen-dxf">📐 Gerar DXF</button>
         <button class="btn ghost" id="btn-export-backup">💾 Exportar backup (zip)</button>
+        <button class="btn ghost" id="btn-sync-photos">🔄 Sincronizar fotos com a pasta</button>
       </div>
       <div id="gen-status" class="hint" style="margin-top:8px;"></div>
+      <div class="hint" style="margin-top:6px;">🔒 As fotos que já estão salvas neste relatório continuam protegidas no armazenamento do aplicativo. A sincronização apenas copia novamente as fotos para a pasta Fotos; não apaga nem substitui o serviço.</div>
       <div class="row-actions" id="share-row" style="display:none; margin-top:8px;">
         <button class="btn ghost" id="btn-share-last">📤 Compartilhar arquivo gerado</button>
       </div>
@@ -6066,8 +6068,11 @@ document.getElementById('annotate-save').addEventListener('click', async () => {
     await dbPut('photos', photo);
     try {
       const report = await dbGet('reports', photo.reportId);
-      if (report) await savePhotoToLocalFolder(photo, report);
-    } catch (e) { console.warn('Não foi possível regravar a foto anotada na pasta local:', e); }
+      if (report) {
+        const copied = await savePhotoToLocalFolder(photo, report);
+        if (!copied) console.warn('Anotação salva no aplicativo, mas a cópia física será feita na próxima sincronização.');
+      }
+    } catch (e) { console.warn('Anotação salva no aplicativo; não foi possível regravar a cópia física:', e); }
     document.getElementById('modal-annotate').classList.remove('show');
     hideSpinner();
     renderPoleScreen();
@@ -6745,15 +6750,21 @@ async function writeBlobToFolder(folderHandle, filename, blob) {
 }
 
 async function savePhotoToLocalFolder(photo, report) {
+  if (!photo || !report) return false;
+
+  // Não pede uma pasta nova durante cada foto. Primeiro tenta restaurar a
+  // pasta que o usuário já autorizou; se a permissão não estiver disponível,
+  // a foto continua segura no IndexedDB e poderá ser sincronizada depois.
+  if (!localRootHandle) await restoreLocalRootHandle();
   const folders = await getReportFolders(report, false);
   if (!folders) return false;
+  if (!photo.workDataUrl) throw new Error('A foto não possui imagem armazenada.');
 
   const pole = await dbGet('poles', photo.poleId);
-  const poleName = sanitizeFilename(pole ? pole.label : 'Poste');
-  // Cada poste ganha sua própria subpasta dentro de Fotos, assim as fotos
-  // de um poste não ficam misturadas com as dos outros.
-  const poleFolder = await folders.fotos.getDirectoryHandle(poleName || 'Poste', { create: true });
-  const d = new Date(photo.capturedAt);
+  const poleName = sanitizeFilename(pole ? pole.label : 'Poste') || 'Poste';
+  // Cada poste ganha sua própria subpasta dentro de Fotos.
+  const poleFolder = await folders.fotos.getDirectoryHandle(poleName, { create: true });
+  const d = new Date(photo.capturedAt || Date.now());
   const stamp = [
     d.getFullYear(),
     pad2(d.getMonth() + 1),
@@ -6763,10 +6774,46 @@ async function savePhotoToLocalFolder(photo, report) {
     pad2(d.getMinutes()),
     pad2(d.getSeconds()),
   ].join('');
+  // O ID da foto faz o nome ser estável: ao sincronizar novamente, o mesmo
+  // arquivo é sobrescrito em vez de criar cópias infinitas.
   const base = photo.isBase ? '_PE' : '';
   const filename = `${poleName}_${stamp}_${photo.id.slice(-6)}${base}.jpg`;
   await writeBlobToFolder(poleFolder, filename, dataUrlToBlob(photo.workDataUrl));
   return true;
+}
+
+// Regrava TODAS as fotos do relatório que estão no IndexedDB na pasta Fotos.
+// Esta é a função de resgate: ela não apaga dados do banco e não depende de
+// as fotos terem sido copiadas corretamente no momento da captura.
+async function syncAllPhotosToLocalFolder(reportId) {
+  const report = await dbGet('reports', reportId);
+  if (!report) throw new Error('Relatório não encontrado.');
+
+  await ensureOutputFolder();
+  if (!localRootHandle) throw new Error('Nenhuma pasta principal foi selecionada.');
+
+  const photos = await dbGetAllByIndex('photos', 'reportId', reportId);
+  photos.sort((a, b) => (a.capturedAt || 0) - (b.capturedAt || 0));
+
+  let saved = 0;
+  let failed = 0;
+  const errors = [];
+
+  for (const photo of photos) {
+    try {
+      const ok = await savePhotoToLocalFolder(photo, report);
+      if (ok) saved++;
+      else {
+        failed++;
+        errors.push((photo.id || 'foto') + ': pasta sem acesso');
+      }
+    } catch (e) {
+      failed++;
+      errors.push((photo.id || 'foto') + ': ' + (e.message || e));
+    }
+  }
+
+  return { total: photos.length, saved, failed, errors };
 }
 
 async function ensureOutputFolder() {
@@ -6832,9 +6879,11 @@ document.getElementById('modal-caption-save').addEventListener('click', async ()
   // foi selecionada. O banco IndexedDB continua sendo a cópia de segurança.
   try {
     const report = await dbGet('reports', state.currentReportId);
-    await savePhotoToLocalFolder(photo, report);
+    const copied = await savePhotoToLocalFolder(photo, report);
+    if (!copied) console.warn('Foto mantida no aplicativo; ainda não foi copiada para a pasta Fotos.');
   } catch (e) {
-    console.warn('Não foi possível salvar a foto na pasta local:', e);
+    // Não perde a foto: ela já foi gravada no IndexedDB antes desta cópia.
+    console.warn('Não foi possível copiar a foto para a pasta local. Ela continua salva no aplicativo:', e);
   }
 
   if (pc.isBase) {
@@ -7979,6 +8028,32 @@ async function generateDxf(reportId) {
 // Exportar backup (zip com fotos originais processadas + metadados)
 // ============================================================
 document.getElementById('btn-export-backup').addEventListener('click', () => exportBackup(state.currentReportId));
+
+document.getElementById('btn-sync-photos').addEventListener('click', async () => {
+  const reportId = state.currentReportId;
+  if (!reportId) return;
+  const statusEl = document.getElementById('gen-status');
+  showSpinner('Recuperando e sincronizando fotos...');
+  try {
+    const result = await syncAllPhotosToLocalFolder(reportId);
+    hideSpinner();
+    if (result.failed === 0) {
+      statusEl.style.color = 'var(--verde)';
+      statusEl.textContent = `✅ Sincronização concluída: ${result.saved} de ${result.total} foto(s) estão na pasta Fotos. Nenhuma foto do aplicativo foi apagada.`;
+      mostrarToast(`✅ ${result.saved} foto(s) salvas na pasta Fotos`);
+    } else {
+      statusEl.style.color = 'var(--laranja)';
+      statusEl.textContent = `⚠️ ${result.saved} foto(s) copiadas e ${result.failed} não puderam ser copiadas. As fotos continuam protegidas no aplicativo.`;
+      mostrarToast('⚠️ Algumas fotos não puderam ser copiadas', 'aviso');
+      console.warn('Falhas na sincronização:', result.errors);
+    }
+  } catch (e) {
+    hideSpinner();
+    statusEl.style.color = 'var(--vermelho)';
+    statusEl.textContent = '❌ Não foi possível sincronizar as fotos: ' + e.message;
+    alert('Não consegui sincronizar as fotos.\n\nNenhuma foto do serviço foi apagada.\n\n' + e.message);
+  }
+});
 
 async function exportBackup(reportId) {
   const statusEl = document.getElementById('gen-status');
