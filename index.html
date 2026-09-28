@@ -6569,6 +6569,15 @@ async function processImage(img, coord, capturedAt, poleLabel, isBase) {
   drawWatermark(workCanvas, [poleLabel + (isBase ? ' (pé do poste)' : ''), coordLine, dateStr]);
   await getRevistecMarkImg();
   drawRevistecMark(workCanvas); // marca do app no canto superior esquerdo, em toda foto do relatório
+
+  // Logo da empresa nas fotos do relatório:
+  // usa exatamente a mesma configuração da "Foto/vídeo avulsa",
+  // posicionada no canto superior direito. Assim, a foto arquivada
+  // na pasta Fotos e a foto exibida no relatório carregam a identidade
+  // da empresa diretamente na própria imagem.
+  await loadEvidenceHeaderInfo();
+  drawDiscreteCompanyMark(workCanvas);
+
   let workDataUrl = workCanvas.toDataURL('image/jpeg', 0.85);
   workDataUrl = insertGpsExif(workDataUrl, coord, dateObj);
 
