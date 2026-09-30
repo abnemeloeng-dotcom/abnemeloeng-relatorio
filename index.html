@@ -4417,8 +4417,9 @@ if (CLOUD_SYNC_ENABLED) {
 // não houver nada salvo na nuvem.
 async function fetchCloudSettings() {
   if (!cloudDb) return null;
+  if (navigator.onLine === false) return null; // offline: nem tenta
   try {
-    const snap = await cloudDb.collection(CLOUD_COLLECTION).doc(CLOUD_DOC_ID).get();
+    const snap = await withTimeout(cloudDb.collection(CLOUD_COLLECTION).doc(CLOUD_DOC_ID).get({ source: 'server' }), 4000);
     if (!snap.exists) return null;
     return snap.data();
   } catch (e) {
@@ -4584,49 +4585,50 @@ async function onUserLoggedIn(user) {
   const cacheKey = 'fotoprova_account_' + user.uid;
   let data = null;
   let onlineOk = false;
+
+  // 1) Cópia local primeiro: mostra plano/cota instantaneamente, sem rede.
   try {
-    const snap = await withTimeout(ref.get(), 5000);
-    if (snap.exists) data = snap.data();
-    onlineOk = true;
-  } catch (e) {
-    console.warn('Não consegui confirmar a conta agora (provavelmente sem internet) — usando a última cópia salva neste aparelho:', e.message);
+    const cached = localStorage.getItem(cacheKey);
+    if (cached) { data = JSON.parse(cached); currentUserAccount = data; renderAccountStatus(); }
+  } catch (e) { /* segue sem cache */ }
+
+  // 2) Só vai à rede se o aparelho diz estar online (offline = pula, sem esperar).
+  if (navigator.onLine !== false) {
+    try {
+      const snap = await withTimeout(ref.get({ source: 'server' }), 3000);
+      if (snap.exists) { data = snap.data(); }
+      onlineOk = true;
+    } catch (e) {
+      console.warn('Sem conexão com a nuvem — usando a última cópia salva neste aparelho:', e.message);
+    }
   }
 
   if (onlineOk && data) {
-    // Guarda uma cópia local pra usar se, numa próxima vez, o aparelho
-    // estiver sem internet bem no momento do login.
     try { localStorage.setItem(cacheKey, JSON.stringify(data)); } catch (e) { /* não crítico */ }
-  } else if (!data) {
-    try {
-      const cached = localStorage.getItem(cacheKey);
-      if (cached) { data = JSON.parse(cached); mostrarToast('📶 Sem conexão — usando os dados de plano salvos neste aparelho', 'aviso'); }
-    } catch (e) { /* segue sem cache */ }
   }
 
   if (!data) {
-    // Nunca vimos essa conta (nem na nuvem, nem em cache local neste
-    // aparelho) — assume Grátis por padrão; só grava na nuvem se
-    // realmente estivermos online agora.
     data = { email: user.email || '', plan: 'free', reportsThisMonth: 0, reportsTotal: 0, monthKey, createdAt: Date.now(), authorizedDeviceId: null, lastSeenDeviceId: CURRENT_DEVICE_ID };
     if (onlineOk) {
-      try { await withTimeout(ref.set(data), 5000); } catch (e) { console.warn('Falha ao criar conta no banco:', e); }
+      try { await withTimeout(ref.set(data), 3000); } catch (e) { console.warn('Falha ao criar conta no banco:', e); }
     }
-  } else if (data.monthKey !== monthKey) {
+  }
+  if (data.monthKey !== monthKey) {
     data.monthKey = monthKey;
     data.reportsThisMonth = 0;
-    if (onlineOk) {
-      try { await withTimeout(ref.update({ monthKey, reportsThisMonth: 0 }), 5000); } catch (e) { /* segue mesmo se falhar */ }
-    }
   }
-  if (data.reportsTotal === undefined) data.reportsTotal = data.reportsThisMonth || 0; // conta antiga, sem esse campo ainda
-  // Atualiza qual foi o último aparelho a logar nesta conta (visível pro admin,
-  // não muda sozinho o aparelho autorizado — isso só o admin decide).
-  if (onlineOk && data.lastSeenDeviceId !== CURRENT_DEVICE_ID) {
-    data.lastSeenDeviceId = CURRENT_DEVICE_ID;
-    try { await withTimeout(ref.update({ lastSeenDeviceId: CURRENT_DEVICE_ID }), 5000); } catch (e) { /* não crítico */ }
-  }
+  if (data.reportsTotal === undefined) data.reportsTotal = data.reportsThisMonth || 0;
   currentUserAccount = data;
   renderAccountStatus();
+
+  // 3) Atualizações na nuvem em segundo plano, num único update (sem bloquear nada).
+  if (onlineOk) {
+    const patch = {};
+    if (data.lastSeenDeviceId !== CURRENT_DEVICE_ID) { patch.lastSeenDeviceId = CURRENT_DEVICE_ID; data.lastSeenDeviceId = CURRENT_DEVICE_ID; }
+    patch.monthKey = data.monthKey;
+    patch.reportsThisMonth = data.reportsThisMonth;
+    withTimeout(ref.update(patch), 5000).catch(() => { /* não crítico */ });
+  }
 }
 
 function renderAccountStatus() {
@@ -4950,6 +4952,31 @@ function dbGetAllByIndex(store, indexName, value) {
     req.onerror = (ev) => reject(ev.target.error);
   }));
 }
+
+// Resumo leve de um relatório: só contagens (via índice) e UMA foto para a
+// miniatura — em vez de carregar todas as fotos em memória.
+function dbReportSummary(reportId) {
+  return openDB().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(['poles', 'photos'], 'readonly');
+    const out = { poleCount: 0, photoCount: 0, thumbPhoto: null };
+    tx.objectStore('poles').index('reportId').count(reportId).onsuccess = (e) => { out.poleCount = e.target.result; };
+    const pIdx = tx.objectStore('photos').index('reportId');
+    pIdx.count(reportId).onsuccess = (e) => { out.photoCount = e.target.result; };
+    let first = null, scanned = 0;
+    const cur = pIdx.openCursor(IDBKeyRange.only(reportId));
+    cur.onsuccess = (e) => {
+      const c = e.target.result;
+      if (!c) return;
+      const v = c.value;
+      scanned++;
+      if (!first) first = v;
+      if (v.isBase) { out.thumbPhoto = v; return; }
+      if (scanned < 3) c.continue(); // limita a leitura: não varre todas as fotos
+    };
+    tx.oncomplete = () => { if (!out.thumbPhoto) out.thumbPhoto = first; resolve(out); };
+    tx.onerror = (ev) => reject(ev.target.error);
+  }));
+}
 function dbDelete(store, key) {
   return openDB().then(db => new Promise((resolve, reject) => {
     const tx = db.transaction(store, 'readwrite');
@@ -5069,17 +5096,17 @@ async function renderReportsScreen() {
   wrap.innerHTML = '';
   empty.style.display = reports.length ? 'none' : 'block';
 
-  for (const r of reports) {
-    const poles = await dbGetAllByIndex('poles', 'reportId', r.id);
-    const photos = await dbGetAllByIndex('photos', 'reportId', r.id);
-    const thumbPhoto = photos.find(p => p.isBase) || photos[0];
+  const infos = await Promise.all(reports.map((r) => dbReportSummary(r.id)));
+  for (let i = 0; i < reports.length; i++) {
+    const r = reports[i];
+    const { poleCount, photoCount, thumbPhoto } = infos[i];
     const div = document.createElement('div');
     div.className = 'report-item';
     div.innerHTML = `
       <div class="item-thumb" ${thumbPhoto ? `style="background-image:url('${thumbPhoto.thumbDataUrl}')"` : ''}>${thumbPhoto ? '' : '📁'}</div>
       <div class="item-main">
         <div class="item-title">${escapeHtml(r.name)}</div>
-        <div class="item-sub">${poles.length} poste(s) · ${photos.length} foto(s) · ${new Date(r.createdAt).toLocaleDateString('pt-BR')}</div>
+        <div class="item-sub">${poleCount} poste(s) · ${photoCount} foto(s) · ${new Date(r.createdAt).toLocaleDateString('pt-BR')}</div>
       </div>
       <button class="item-del" data-del-report="${r.id}" title="Excluir relatório">🗑️</button>
     `;
@@ -8155,8 +8182,10 @@ if (CLOUD_SYNC_ENABLED && cloudAuth) {
   cloudAuth.onAuthStateChanged(async (user) => {
     if (user) {
       document.getElementById('auth-gate').style.display = 'none';
-      await onUserLoggedIn(user);
+      // Abre o app NA HORA (dados são locais); a conta/plano carrega em
+      // segundo plano e só atualiza o cartão de conta quando chegar.
       if (!appJaIniciado) { appJaIniciado = true; startAppAfterAuth(); }
+      onUserLoggedIn(user).catch((e) => console.warn('Falha ao carregar conta:', e));
     } else {
       currentUserAccount = null;
       currentUserUid = null;
