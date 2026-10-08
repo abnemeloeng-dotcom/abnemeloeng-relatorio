@@ -836,6 +836,15 @@ svg.leaflet-image-layer.leaflet-interactive path {
 
   /* ---- fotos ---- */
   .photo-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
+  .photo-grid.poda-grid { grid-template-columns: repeat(2, 1fr); }
+  .slot-empty { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; width:100%; cursor:pointer; font-family:inherit; font-size:0.85rem; color:var(--texto-suave); border:2px dashed var(--cinza-borda); }
+  .slot-empty .slot-ico { font-size:1.8rem; }
+  .slot-empty b { font-size:1.05rem; }
+  .slot-empty.slot-antes b { color:#d9822b; }
+  .slot-empty.slot-depois b { color:#2e7d32; }
+  .slot-badge { position:absolute; left:6px; top:6px; z-index:2; color:#fff; font-weight:800; font-size:0.78rem; padding:2px 8px; border-radius:6px; }
+  .slot-badge.antes { background:#d9822b; }
+  .slot-badge.depois { background:#2e7d32; }
   .photo-tile { position: relative; border-radius: 8px; overflow: hidden; border: 1px solid var(--cinza-borda); background: var(--cinza-bg); aspect-ratio: 1; }
   .photo-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .photo-tile .photo-del {
@@ -1414,7 +1423,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
       <label><input type="radio" name="pdf-layout" value="4" checked><span>4 por página</span></label>
       <label><input type="radio" name="pdf-layout" value="6"><span>6 por página</span></label>
     </div>
-    <div class="hint" style="margin-top:8px;">As fotos entram em ordem cronológica (horário de cada foto). O PDF final é compactado automaticamente para ficar abaixo de 10MB.</div>
+    <div class="hint" style="margin-top:8px;">O PDF sai separado em 01-POSTE, 02-PODA/ELIMINAÇÃO (antes e depois lado a lado) e 03-OUTROS. O PDF final é compactado automaticamente para ficar abaixo de 10MB.</div>
     <div class="row-actions" style="margin-top:12px;">
       <button class="btn green" id="modal-pdf-generate">Gerar PDF</button>
     </div>
@@ -5453,8 +5462,41 @@ document.getElementById('btn-finish-poles').addEventListener('click', () => {
 // ============================================================
 // TELA: Um poste (fotos)
 // ============================================================
+// Poda/Eliminação: cada atividade tem dois espaços fixos, ANTES e DEPOIS.
+// Fotos antigas (sem o campo slot) são encaixadas por ordem de horário.
+function podaSlotsFor(photos) {
+  const sorted = photos.slice().sort((a, b) => a.capturedAt - b.capturedAt);
+  let antes = sorted.find(p => p.slot === 'antes');
+  let depois = sorted.find(p => p.slot === 'depois');
+  const rest = sorted.filter(p => p !== antes && p !== depois);
+  const legacy = rest.filter(p => !p.slot);
+  const tagged = rest.filter(p => p.slot);
+  if (!antes && legacy.length) antes = legacy.shift();
+  if (!depois && legacy.length) depois = legacy.shift();
+  return { antes, depois, extras: legacy.concat(tagged) };
+}
+function distMeters(a, b) {
+  const R = 6371000, rad = Math.PI / 180;
+  const dLat = (b.lat - a.lat) * rad, dLng = (b.lng - a.lng) * rad;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+async function startSlotCapture(slot) {
+  const pole = await dbGet('poles', state.currentPoleId);
+  const photos = await dbGetAllByIndex('photos', 'poleId', pole.id);
+  if (slot === 'depois' && !podaSlotsFor(photos).antes) {
+    alert('Tire primeiro a foto do ANTES. A do DEPOIS é feita depois, no mesmo local.');
+    return;
+  }
+  state.pendingCapture = { poleId: pole.id, isBase: !pole.baseCoord, slot };
+  const input = document.getElementById('camera-input');
+  input.value = '';
+  input.click();
+}
+
 async function renderPoleScreen() {
   const pole = await dbGet('poles', state.currentPoleId);
+  const isPoda = pole && pole.activityType === 'poda';
   const photos = await dbGetAllByIndex('photos', 'poleId', state.currentPoleId);
   photos.sort((a, b) => a.capturedAt - b.capturedAt);
 
@@ -5468,9 +5510,37 @@ async function renderPoleScreen() {
   const grid = document.getElementById('pole-photo-grid');
   const empty = document.getElementById('pole-photos-empty');
   grid.innerHTML = '';
-  empty.style.display = photos.length ? 'none' : 'block';
+  empty.style.display = (photos.length || isPoda) ? 'none' : 'block';
+  grid.classList.toggle('poda-grid', !!isPoda);
+  document.getElementById('btn-add-photo').style.display = isPoda ? 'none' : '';
+  if (isPoda) {
+    infoEl.innerHTML += '<br>🌳 <b>Poda/Eliminação:</b> toque em <b>ANTES</b> e fotografe. Faça o serviço, volte ao mesmo local e toque em <b>DEPOIS</b>.';
+    const sl = podaSlotsFor(photos);
+    [['antes', sl.antes], ['depois', sl.depois]].forEach(([slot, ph]) => {
+      const label = slot === 'antes' ? 'ANTES' : 'DEPOIS';
+      if (ph) {
+        const tile = document.createElement('div');
+        tile.className = 'photo-tile' + (ph.annotationShapes && ph.annotationShapes.length ? ' has-annotation' : '');
+        tile.innerHTML = `
+          <span class="slot-badge ${slot}">${label}</span>
+          <img src="${ph.thumbDataUrl}">
+          <button class="photo-annotate" data-annotate-photo="${ph.id}" title="Anotar/Medir">✏️</button>
+          <button class="photo-del" data-del-photo="${ph.id}" title="Remover">🗑️</button>
+          ${ph.caption ? `<div class="photo-cap">${escapeHtml(ph.caption)}</div>` : ''}
+        `;
+        grid.appendChild(tile);
+      } else {
+        const b = document.createElement('button');
+        b.className = 'photo-tile slot-empty slot-' + slot;
+        b.dataset.slotAdd = slot;
+        b.innerHTML = `<span class="slot-ico">📷</span><b>${label}</b><span>Toque para fotografar</span>`;
+        b.addEventListener('click', () => startSlotCapture(slot));
+        grid.appendChild(b);
+      }
+    });
+  }
 
-  photos.forEach(p => {
+  (isPoda ? podaSlotsFor(photos).extras : photos).forEach(p => {
     const tile = document.createElement('div');
     tile.className = 'photo-tile' + (p.isBase ? ' is-base' : '') + (p.annotationShapes && p.annotationShapes.length ? ' has-annotation' : '');
     tile.innerHTML = `
@@ -6620,6 +6690,7 @@ async function handleCameraFile(file) {
   try {
     const pole = await dbGet('poles', state.pendingCapture.poleId);
     const isBase = state.pendingCapture.isBase;
+    const slot = state.pendingCapture.slot || null;
 
     // Carrega a foto ANTES de mexer em geolocalização: se a câmera do celular
     // já gravou o GPS no próprio arquivo (o mais comum), usamos direto daí —
@@ -6644,9 +6715,16 @@ async function handleCameraFile(file) {
       }
     }
 
+    if (slot === 'depois' && pole.baseCoord && coord) {
+      const dist = distMeters(pole.baseCoord, coord);
+      if (dist > 60 && !confirm(`Você está a cerca de ${Math.round(dist)} m do local do ANTES.\n\nPara comprovar a poda, a foto do DEPOIS deve ser tirada no mesmo ponto. Salvar mesmo assim?`)) {
+        hideSpinner(); state.pendingCapture = null; return;
+      }
+    }
     showSpinner('Processando foto...');
     const capturedAt = Date.now();
-    const { workDataUrl, thumbDataUrl } = await processImage(img, coord, capturedAt, pole.label, isBase);
+    const stampLabel = slot ? pole.label + ' — ' + (slot === 'antes' ? 'ANTES' : 'DEPOIS') : pole.label;
+    const { workDataUrl, thumbDataUrl } = await processImage(img, coord, capturedAt, stampLabel, isBase && !slot);
 
     state.pendingCapture.coord = coord;
     state.pendingCapture.capturedAt = capturedAt;
@@ -6659,6 +6737,7 @@ async function handleCameraFile(file) {
     let coordLabel = isBase ? '📍 Pé do poste — coordenada: ' : '📍 Coordenada (herdada do pé do poste): ';
     if (isBase && coord.fromExif) coordLabel = '📍 Pé do poste — coordenada lida da foto (GPS da câmera): ';
     else if (isBase && coord.manual) coordLabel = '📍 Pé do poste — coordenada informada manualmente: ';
+    if (slot) coordLabel = (slot === 'antes' ? '📍 ANTES — coordenada: ' : '📍 DEPOIS — coordenada: ');
     document.getElementById('modal-caption-meta').textContent =
       coordLabel + coord.lat.toFixed(5) + ', ' + coord.lng.toFixed(5);
     document.getElementById('modal-caption-text').value = '';
@@ -6813,7 +6892,8 @@ async function savePhotoToLocalFolder(photo, report) {
   // O ID da foto faz o nome ser estável: ao sincronizar novamente, o mesmo
   // arquivo é sobrescrito em vez de criar cópias infinitas.
   const base = photo.isBase ? '_PE' : '';
-  const filename = `${poleName}_${stamp}_${photo.id.slice(-6)}${base}.jpg`;
+  const slotTag = photo.slot === 'antes' ? '_ANTES' : photo.slot === 'depois' ? '_DEPOIS' : '';
+  const filename = `${poleName}${slotTag}_${stamp}_${photo.id.slice(-6)}${base}.jpg`;
   await writeBlobToFolder(poleFolder, filename, dataUrlToBlob(photo.workDataUrl));
   return true;
 }
@@ -6908,6 +6988,7 @@ document.getElementById('modal-caption-save').addEventListener('click', async ()
     capturedAt: pc.capturedAt,
     coord: pc.coord,
     isBase: pc.isBase,
+    slot: pc.slot || null,
   };
   await dbPut('photos', photo);
 
@@ -7550,10 +7631,32 @@ async function buildPdfDoc(report, poles, photosByPole, settings, layout, imgMax
   const headerH = 74;
   const footerH = 16;
 
-  // todas as fotos do relatório, em ordem cronológica
-  let allPhotos = [];
-  poles.forEach(pl => { (photosByPole[pl.id] || []).forEach(p => allPhotos.push({ photo: p, pole: pl })); });
-  allPhotos.sort((a, b) => a.photo.capturedAt - b.photo.capturedAt);
+  // Fotos separadas por categoria, nesta ordem: 01-POSTE, 02-PODA/ELIMINAÇÃO, 03-OUTROS.
+  // Dentro de cada categoria: atividades na ordem de criação e fotos por horário.
+  // Na poda, cada atividade vira um par ANTES | DEPOIS lado a lado.
+  const CATS = [
+    { key: 'poste', title: '01 – POSTE' },
+    { key: 'poda', title: '02 – PODA / ELIMINAÇÃO (ANTES e DEPOIS)' },
+    { key: 'outros', title: '03 – OUTROS' },
+  ];
+  const sections = CATS.map(cat => {
+    const items = [];
+    poles.forEach(pl => {
+      const k = (pl.activityType === 'poda' || pl.activityType === 'outros') ? pl.activityType : 'poste';
+      if (k !== cat.key) return;
+      const ph = photosByPole[pl.id] || [];
+      if (!ph.length) return;
+      if (k === 'poda') {
+        const sl = podaSlotsFor(ph);
+        items.push(sl.antes ? { photo: sl.antes, pole: pl, slotLabel: 'ANTES' } : { placeholder: true, pole: pl, slotLabel: 'ANTES' });
+        items.push(sl.depois ? { photo: sl.depois, pole: pl, slotLabel: 'DEPOIS' } : { placeholder: true, pole: pl, slotLabel: 'DEPOIS' });
+        sl.extras.forEach(p => items.push({ photo: p, pole: pl }));
+      } else {
+        ph.forEach(p => items.push({ photo: p, pole: pl }));
+      }
+    });
+    return { title: cat.title, items };
+  }).filter(sec => sec.items.length);
 
   function drawHeader(pageIndex) {
     let x = margin;
@@ -7594,9 +7697,14 @@ async function buildPdfDoc(report, poles, photosByPole, settings, layout, imgMax
 
   const { cols, rows } = PDF_LAYOUTS[layout];
   const perPage = cols * rows;
-  const totalPages = Math.max(1, Math.ceil(allPhotos.length / perPage));
+  // cada categoria começa em página nova
+  const pageList = [];
+  sections.forEach(sec => {
+    for (let i = 0; i < sec.items.length; i += perPage) pageList.push({ title: sec.title, items: sec.items.slice(i, i + perPage) });
+  });
+  const totalPages = Math.max(1, pageList.length);
   const gap = 10;
-  const contentTop = margin + headerH;
+  const contentTop = margin + headerH + 18; // 18pt extras: faixa com o título da categoria
   const contentBottom = pageH - margin - footerH;
   const contentW = pageW - margin * 2;
   const contentH = contentBottom - contentTop;
@@ -7607,14 +7715,28 @@ async function buildPdfDoc(report, poles, photosByPole, settings, layout, imgMax
   for (let pageIdx = 0; pageIdx < totalPages; pageIdx++) {
     if (pageIdx > 0) doc.addPage();
     drawHeader(pageIdx);
-    const pagePhotos = allPhotos.slice(pageIdx * perPage, (pageIdx + 1) * perPage);
+    const curPage = pageList[pageIdx] || { title: '', items: [] };
+    doc.setFont(undefined, 'bold'); doc.setFontSize(10.5); doc.setTextColor(26, 58, 92);
+    doc.text(curPage.title, margin, margin + headerH + 8);
+    const pagePhotos = curPage.items;
     for (let i = 0; i < pagePhotos.length; i++) {
       const col = i % cols, row = Math.floor(i / cols);
       const cellX = margin + col * (cellW + gap);
       const cellY = contentTop + row * (cellH + gap);
-      const { photo, pole } = pagePhotos[i];
+      const it = pagePhotos[i];
+      const { photo, pole } = it;
 
       const imgAreaH = cellH - textBlockH;
+      if (it.placeholder) {
+        doc.setDrawColor(190, 195, 200); doc.setLineDashPattern([4, 3], 0);
+        doc.rect(cellX, cellY, cellW, imgAreaH);
+        doc.setLineDashPattern([], 0);
+        doc.setFont(undefined, 'bold'); doc.setFontSize(10); doc.setTextColor(150, 155, 160);
+        doc.text(`Foto do ${it.slotLabel} pendente`, cellX + cellW / 2, cellY + imgAreaH / 2, { align: 'center' });
+        doc.setFont(undefined, 'normal'); doc.setFontSize(6.8); doc.setTextColor(120, 128, 136);
+        doc.text(`${pole.label} · ${it.slotLabel}`, cellX, cellY + imgAreaH + 18);
+        continue;
+      }
       const resized = await resizeDataUrl(photo.workDataUrl, imgMaxDim, imgQuality);
       const ratio = resized.w / resized.h;
       let drawW = cellW, drawH = drawW / ratio;
@@ -7624,9 +7746,17 @@ async function buildPdfDoc(report, poles, photosByPole, settings, layout, imgMax
       try { doc.addImage(resized.dataUrl, 'JPEG', imgX, imgY, drawW, drawH); } catch (e) { console.warn(e); }
       doc.setDrawColor(220, 223, 228);
       doc.rect(cellX, cellY, cellW, imgAreaH);
+      if (it.slotLabel) {
+        const isAntes = it.slotLabel === 'ANTES';
+        const bw = isAntes ? 44 : 52;
+        doc.setFillColor(isAntes ? 217 : 46, isAntes ? 130 : 125, isAntes ? 43 : 50);
+        doc.rect(cellX + 4, cellY + 4, bw, 14, 'F');
+        doc.setFont(undefined, 'bold'); doc.setFontSize(8.5); doc.setTextColor(255, 255, 255);
+        doc.text(it.slotLabel, cellX + 4 + bw / 2, cellY + 14, { align: 'center' });
+      }
 
       const d = new Date(photo.capturedAt);
-      const metaLine = `${pole.label} · ${photo.coord ? photo.coord.lat.toFixed(5) + ', ' + photo.coord.lng.toFixed(5) : 's/ coord.'} · ${d.toLocaleDateString('pt-BR')} ${d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}`;
+      const metaLine = `${pole.label}${it.slotLabel ? ' · ' + it.slotLabel : ''} · ${photo.coord ? photo.coord.lat.toFixed(5) + ', ' + photo.coord.lng.toFixed(5) : 's/ coord.'} · ${d.toLocaleDateString('pt-BR')} ${d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}`;
 
       // A descrição fica FORA da fotografia, logo abaixo dela.
       // Assim não cobre a imagem e fica próxima das coordenadas/data.
@@ -7734,8 +7864,8 @@ function nameWithTimestamp(baseName) {
 // cai para um download forçado do arquivo, que o usuário então compartilha
 // pelo próprio gerenciador de arquivos/Downloads do celular.
 // ============================================================
-function setLastGeneratedFile(blob, filename, mimeType) {
-  state.lastGeneratedFile = { blob, filename, mimeType };
+function setLastGeneratedFile(blob, filename, mimeType, extra) {
+  state.lastGeneratedFile = { blob, filename, mimeType, extra: extra || [] };
   const row = document.getElementById('share-row');
   if (row) row.style.display = '';
 }
@@ -7881,6 +8011,28 @@ document.getElementById('btn-share-last').addEventListener('click', async () => 
   btn.disabled = true;
   btn.textContent = '📤 Preparando...';
   try {
+    // Vários arquivos (ex.: um KMZ por categoria): tenta compartilhar todos de uma vez;
+    // se o aparelho não permitir, baixa um por um.
+    if (f.extra && f.extra.length) {
+      const all = [f].concat(f.extra);
+      let done = false;
+      try {
+        const files = all.map(x => new File([x.blob], x.filename, { type: x.mimeType }));
+        if (navigator.canShare && navigator.canShare({ files })) {
+          await navigator.share({ files, title: 'Relatório – KMZ' });
+          mostrarToast('✅ Compartilhado');
+          done = true;
+        }
+      } catch (e) {
+        if (e && e.name === 'AbortError') return;
+        console.warn('Compartilhamento múltiplo falhou, baixando um por um:', e);
+      }
+      if (!done) {
+        all.forEach((x, i) => setTimeout(() => forceDownload(x.blob, x.filename), i * 600));
+        alert(`Este aparelho não compartilha vários arquivos de uma vez. Os ${all.length} arquivos foram baixados — abra Downloads e compartilhe-os de lá.`);
+      }
+      return;
+    }
     const result = await shareBlob(f.blob, f.filename, f.mimeType, f.filename);
     if (result === 'shared-no-file') {
       alert(`O menu de compartilhamento abriu, mas este navegador não permitiu anexar o arquivo diretamente. O arquivo "${f.filename}" continua salvo na pasta do relatório — anexe-o manualmente pelo app escolhido.`);
@@ -7913,9 +8065,11 @@ async function generateKmz(reportId) {
     const poles = await dbGetAllByIndex('poles', 'reportId', reportId);
     poles.sort((a, b) => a.createdAt - b.createdAt);
 
-    const zip = new JSZip();
-    const imgFolder = zip.folder('images');
-    let placemarksXml = '';
+    // Um KMZ por categoria: cada um com seu próprio zip e sua pasta de imagens.
+    const zips = { poste: new JSZip(), poda: new JSZip(), outros: new JSZip() };
+    const imgFolders = { poste: zips.poste.folder('images'), poda: zips.poda.folder('images'), outros: zips.outros.folder('images') };
+    const catXml = { poste: '', poda: '', outros: '' };
+    const catPath = { poste: [], poda: [], outros: [] };
     let anyPoint = false;
 
     for (const pl of poles) {
@@ -7923,18 +8077,29 @@ async function generateKmz(reportId) {
       anyPoint = true;
       const photos = await dbGetAllByIndex('photos', 'poleId', pl.id);
       photos.sort((a, b) => a.capturedAt - b.capturedAt);
+      const catKey = (pl.activityType === 'poda' || pl.activityType === 'outros') ? pl.activityType : 'poste';
+      let list = photos.map(p => ({ p, tag: '' }));
+      if (catKey === 'poda') {
+        const sl = podaSlotsFor(photos);
+        list = [];
+        if (sl.antes) list.push({ p: sl.antes, tag: 'ANTES' });
+        if (sl.depois) list.push({ p: sl.depois, tag: 'DEPOIS' });
+        sl.extras.forEach(p => list.push({ p, tag: '' }));
+      }
+      catPath[catKey].push(`${pl.baseCoord.lng},${pl.baseCoord.lat},0`);
       let imgsHtml = '';
-      for (let i = 0; i < photos.length; i++) {
-        const resized = await resizeDataUrl(photos[i].workDataUrl, 700, 0.6);
+      for (let i = 0; i < list.length; i++) {
+        const resized = await resizeDataUrl(list[i].p.workDataUrl, 700, 0.6);
         const fname = `${pl.id}_${i}.jpg`;
-        imgFolder.file(fname, dataUrlToBase64(resized.dataUrl), { base64: true });
-        const capEsc = escapeXml(photos[i].caption || '');
-        imgsHtml += `<img src="images/${fname}" width="280"/><br/>${capEsc}<br/><br/>`;
+        imgFolders[catKey].file(fname, dataUrlToBase64(resized.dataUrl), { base64: true });
+        const capEsc = escapeXml(list[i].p.caption || '');
+        imgsHtml += `${list[i].tag ? `<b>${list[i].tag}</b><br/>` : ''}<img src="images/${fname}" width="280"/><br/>${capEsc}<br/><br/>`;
       }
       const desc = `<![CDATA[<b>${escapeXml(pl.label)}</b><br/>Coordenada: ${pl.baseCoord.lat.toFixed(6)}, ${pl.baseCoord.lng.toFixed(6)}<br/><br/>${imgsHtml}]]>`;
-      placemarksXml += `
+      catXml[catKey] += `
   <Placemark>
     <name>${escapeXml(pl.label)}</name>
+    <styleUrl>#st-${catKey}</styleUrl>
     <description>${desc}</description>
     <Point><coordinates>${pl.baseCoord.lng},${pl.baseCoord.lat},0</coordinates></Point>
   </Placemark>`;
@@ -7947,23 +8112,37 @@ async function generateKmz(reportId) {
       return;
     }
 
-    const kml = `<?xml version="1.0" encoding="UTF-8"?>
+    const COLORS = { poste: 'ffff0000', poda: 'ff00a000', outros: 'ff0080ff' };
+    const TITLES = { poste: '01 – POSTE', poda: '02 – PODA / ELIMINAÇÃO', outros: '03 – OUTROS' };
+    const SUFFIX = { poste: '01-POSTE', poda: '02-PODA', outros: '03-OUTROS' };
+    const baseName = nameWithTimestamp(report.name);
+    const made = [];
+    for (const k of ['poste', 'poda', 'outros']) {
+      if (!catXml[k]) continue;
+      const t = TITLES[k];
+      const path = catPath[k].length > 1
+        ? `\n  <Placemark><name>Trajeto – ${t}</name><Style><LineStyle><color>${COLORS[k]}</color><width>2</width></LineStyle></Style><LineString><tessellate>1</tessellate><coordinates>${catPath[k].join(' ')}</coordinates></LineString></Placemark>`
+        : '';
+      const kml = `<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
 <Document>
-  <name>${escapeXml(report.name)}</name>
-  ${placemarksXml}
+  <name>${escapeXml(report.name)} – ${t}</name>
+  <Style id="st-${k}"><IconStyle><color>${COLORS[k]}</color><scale>1.1</scale><Icon><href>http://maps.google.com/mapfiles/kml/pushpin/wht-pushpin.png</href></Icon></IconStyle></Style>
+  ${catXml[k]}${path}
 </Document>
 </kml>`;
-    zip.file('doc.kml', kml);
-
-    const blob = await zip.generateAsync({ type: 'blob' });
-    const kmzFilename = nameWithTimestamp(report.name) + '.kmz';
-    const savedLocal = await saveGeneratedFile(report, 'kmz', kmzFilename, blob);
-    setLastGeneratedFile(blob, kmzFilename, 'application/vnd.google-earth.kmz');
+      zips[k].file('doc.kml', kml);
+      const blob = await zips[k].generateAsync({ type: 'blob' });
+      const filename = `${baseName}_${SUFFIX[k]}.kmz`;
+      const savedLocal = await saveGeneratedFile(report, 'kmz', filename, blob);
+      made.push({ blob, filename, mimeType: 'application/vnd.google-earth.kmz', savedLocal });
+    }
+    setLastGeneratedFile(made[0].blob, made[0].filename, made[0].mimeType, made.slice(1));
 
     hideSpinner();
+    const allSaved = made.every(m => m.savedLocal);
     statusEl.style.color = 'var(--verde)';
-    statusEl.textContent = `✅ KMZ gerado (${(blob.size / 1024).toFixed(0)}KB) e ${savedLocal ? 'salvo na pasta KMZ.' : 'baixado.'}`;
+    statusEl.textContent = `✅ ${made.length} KMZ gerado(s): ${made.map(m => m.filename).join(', ')} — ${allSaved ? 'salvos na pasta KMZ.' : 'baixados.'}`;
   } catch (e) {
     hideSpinner();
     statusEl.style.color = 'var(--vermelho)';
@@ -7995,30 +8174,41 @@ function projectLocalMeters(coord, origin) {
 function dxfSanitizeText(s) {
   return String(s == null ? '' : s).replace(/[\r\n]+/g, ' ');
 }
-function buildDxf(report, pointPoles, origin) {
+function poleCategoryKey(pl) {
+  return (pl.activityType === 'poda' || pl.activityType === 'outros') ? pl.activityType : 'poste';
+}
+function buildDxf(report, pointPoles, origin, onlyKey) {
   let out = '';
   const w = (code, val) => { out += code + '\n' + val + '\n'; };
 
   w(0, 'SECTION'); w(2, 'ENTITIES');
 
-  // linha conectando os postes na ordem em que foram criados em campo
-  if (pointPoles.length > 1) {
-    w(0, 'POLYLINE'); w(8, 'POSTES-LINHA'); w(66, 1); w(70, 0);
-    pointPoles.forEach(p => {
-      w(0, 'VERTEX'); w(8, 'POSTES-LINHA');
+  // Uma camada (e uma linha de trajeto) por categoria, para poste, poda e
+  // outros não se misturarem. Dentro de cada categoria, a ordem é a de criação.
+  const GROUPS = [['poste', 'POSTES'], ['poda', 'PODAS'], ['outros', 'OUTROS']];
+  GROUPS.forEach(([key, layer]) => {
+    if (onlyKey && key !== onlyKey) return;
+    const pts = pointPoles.filter(p => poleCategoryKey(p.pole) === key);
+    if (!pts.length) return;
+
+    if (pts.length > 1) {
+      w(0, 'POLYLINE'); w(8, layer + '-LINHA'); w(66, 1); w(70, 0);
+      pts.forEach(p => {
+        w(0, 'VERTEX'); w(8, layer + '-LINHA');
+        w(10, p.xy.x.toFixed(3)); w(20, p.xy.y.toFixed(3)); w(30, '0.0');
+      });
+      w(0, 'SEQEND');
+    }
+
+    pts.forEach((p) => {
+      w(0, 'POINT'); w(8, layer);
       w(10, p.xy.x.toFixed(3)); w(20, p.xy.y.toFixed(3)); w(30, '0.0');
+
+      w(0, 'TEXT'); w(8, layer + '-TEXTO');
+      w(10, (p.xy.x + 0.6).toFixed(3)); w(20, (p.xy.y + 0.6).toFixed(3)); w(30, '0.0');
+      w(40, '1.0');
+      w(1, dxfSanitizeText(p.pole.label));
     });
-    w(0, 'SEQEND');
-  }
-
-  pointPoles.forEach((p) => {
-    w(0, 'POINT'); w(8, 'POSTES');
-    w(10, p.xy.x.toFixed(3)); w(20, p.xy.y.toFixed(3)); w(30, '0.0');
-
-    w(0, 'TEXT'); w(8, 'POSTES-TEXTO');
-    w(10, (p.xy.x + 0.6).toFixed(3)); w(20, (p.xy.y + 0.6).toFixed(3)); w(30, '0.0');
-    w(40, '1.0');
-    w(1, dxfSanitizeText(p.pole.label));
   });
 
   w(0, 'ENDSEC'); w(0, 'EOF');
@@ -8044,15 +8234,24 @@ async function generateDxf(reportId) {
     const origin = withCoord[0].baseCoord;
     const pointPoles = withCoord.map(pl => ({ pole: pl, xy: projectLocalMeters(pl.baseCoord, origin) }));
 
-    const dxf = buildDxf(report, pointPoles, origin);
-    const blob = new Blob([dxf], { type: 'application/dxf' });
-    const dxfFilename = nameWithTimestamp(report.name) + '.dxf';
-    const savedLocal = await saveGeneratedFile(report, 'cad', dxfFilename, blob);
-    setLastGeneratedFile(blob, dxfFilename, 'application/dxf');
+    // Um DXF por categoria. Todos usam a MESMA origem (o 1º ponto do relatório),
+    // então ao abrir os três no CAD eles se encaixam exatamente no mesmo lugar.
+    const SUFFIX = { poste: '01-POSTE', poda: '02-PODA', outros: '03-OUTROS' };
+    const baseName = nameWithTimestamp(report.name);
+    const made = [];
+    for (const k of ['poste', 'poda', 'outros']) {
+      if (!pointPoles.some(p => poleCategoryKey(p.pole) === k)) continue;
+      const blob = new Blob([buildDxf(report, pointPoles, origin, k)], { type: 'application/dxf' });
+      const filename = `${baseName}_${SUFFIX[k]}.dxf`;
+      const savedLocal = await saveGeneratedFile(report, 'cad', filename, blob);
+      made.push({ blob, filename, mimeType: 'application/dxf', savedLocal });
+    }
+    setLastGeneratedFile(made[0].blob, made[0].filename, made[0].mimeType, made.slice(1));
 
     hideSpinner();
+    const allSaved = made.every(m => m.savedLocal);
     statusEl.style.color = 'var(--verde)';
-    statusEl.textContent = `✅ DXF gerado (${withCoord.length} poste(s)) e ${savedLocal ? 'salvo na pasta CAD.' : 'baixado.'} Coordenadas em metros, relativas ao 1º poste (não é projeção oficial tipo UTM).`;
+    statusEl.textContent = `✅ ${made.length} DXF gerado(s): ${made.map(m => m.filename).join(', ')} — ${allSaved ? 'salvos na pasta CAD.' : 'baixados.'} Coordenadas em metros, relativas ao 1º ponto do relatório (mesma origem nos arquivos).`;
   } catch (e) {
     hideSpinner();
     statusEl.style.color = 'var(--vermelho)';
