@@ -7727,12 +7727,23 @@ async function buildPdfDoc(report, poles, photosByPole, settings, layout, imgMax
       const { photo, pole } = it;
 
       const imgAreaH = cellH - textBlockH;
+      // Poda: a etiqueta ANTES/DEPOIS fica numa faixa ACIMA da foto, fora da imagem.
+      const bandH = it.slotLabel ? 16 : 0;
+      const frameY = cellY + bandH, frameH = imgAreaH - bandH;
+      if (it.slotLabel) {
+        const isAntes = it.slotLabel === 'ANTES';
+        const bw = isAntes ? 50 : 58;
+        doc.setFillColor(isAntes ? 217 : 46, isAntes ? 130 : 125, isAntes ? 43 : 50);
+        doc.rect(cellX, cellY, bw, bandH, 'F');
+        doc.setFont(undefined, 'bold'); doc.setFontSize(9); doc.setTextColor(255, 255, 255);
+        doc.text(it.slotLabel, cellX + bw / 2, cellY + bandH - 4.5, { align: 'center' });
+      }
       if (it.placeholder) {
         doc.setDrawColor(190, 195, 200); doc.setLineDashPattern([4, 3], 0);
-        doc.rect(cellX, cellY, cellW, imgAreaH);
+        doc.rect(cellX, frameY, cellW, frameH);
         doc.setLineDashPattern([], 0);
         doc.setFont(undefined, 'bold'); doc.setFontSize(10); doc.setTextColor(150, 155, 160);
-        doc.text(`Foto do ${it.slotLabel} pendente`, cellX + cellW / 2, cellY + imgAreaH / 2, { align: 'center' });
+        doc.text(`Foto do ${it.slotLabel} pendente`, cellX + cellW / 2, frameY + frameH / 2, { align: 'center' });
         doc.setFont(undefined, 'normal'); doc.setFontSize(6.8); doc.setTextColor(120, 128, 136);
         doc.text(`${pole.label} · ${it.slotLabel}`, cellX, cellY + imgAreaH + 18);
         continue;
@@ -7740,20 +7751,12 @@ async function buildPdfDoc(report, poles, photosByPole, settings, layout, imgMax
       const resized = await resizeDataUrl(photo.workDataUrl, imgMaxDim, imgQuality);
       const ratio = resized.w / resized.h;
       let drawW = cellW, drawH = drawW / ratio;
-      if (drawH > imgAreaH) { drawH = imgAreaH; drawW = drawH * ratio; }
+      if (drawH > frameH) { drawH = frameH; drawW = drawH * ratio; }
       const imgX = cellX + (cellW - drawW) / 2;
-      const imgY = cellY + (imgAreaH - drawH) / 2;
+      const imgY = frameY + (frameH - drawH) / 2;
       try { doc.addImage(resized.dataUrl, 'JPEG', imgX, imgY, drawW, drawH); } catch (e) { console.warn(e); }
       doc.setDrawColor(220, 223, 228);
-      doc.rect(cellX, cellY, cellW, imgAreaH);
-      if (it.slotLabel) {
-        const isAntes = it.slotLabel === 'ANTES';
-        const bw = isAntes ? 44 : 52;
-        doc.setFillColor(isAntes ? 217 : 46, isAntes ? 130 : 125, isAntes ? 43 : 50);
-        doc.rect(cellX + 4, cellY + 4, bw, 14, 'F');
-        doc.setFont(undefined, 'bold'); doc.setFontSize(8.5); doc.setTextColor(255, 255, 255);
-        doc.text(it.slotLabel, cellX + 4 + bw / 2, cellY + 14, { align: 'center' });
-      }
+      doc.rect(cellX, frameY, cellW, frameH);
 
       const d = new Date(photo.capturedAt);
       const metaLine = `${pole.label}${it.slotLabel ? ' · ' + it.slotLabel : ''} · ${photo.coord ? photo.coord.lat.toFixed(5) + ', ' + photo.coord.lng.toFixed(5) : 's/ coord.'} · ${d.toLocaleDateString('pt-BR')} ${d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}`;
