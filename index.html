@@ -1233,6 +1233,8 @@ svg.leaflet-image-layer.leaflet-interactive path {
     <select id="new-report-equipe"></select>
     <label class="field-label">Supervisor</label>
     <select id="new-report-supervisor"></select>
+    <label class="field-label">Assunto <span style="font-weight:400; opacity:0.7;">(opcional)</span></label>
+    <input type="text" id="new-report-assunto" placeholder="Ex: Viatura 1234567 / Trecho Norte" autocomplete="off">
     <div class="hint" id="new-report-cad-hint" style="margin-top:8px; display:none;">
       Município, equipe ou supervisor que você precisa não está na lista? Cadastre em ⚙️ Configurações do cabeçalho.
     </div>
@@ -1346,6 +1348,14 @@ svg.leaflet-image-layer.leaflet-interactive path {
 </div>
 
 <!-- ============ MODAL: evidência avulsa (foto/vídeo de um local, fora de relatório) ============ -->
+<div class="modal-overlay" id="modal-evidence-pick-report" style="z-index:100000;">
+  <div class="modal-box">
+    <button class="modal-close-x" id="evidence-pick-close">✕</button>
+    <h3>📋 Usar dados de um relatório</h3>
+    <div class="hint">Toque no relatório para copiar Nota/OS, Equipe e Supervisor (e o Assunto, se ele tiver) para a foto/vídeo avulso.</div>
+    <div id="evidence-report-list"></div>
+  </div>
+</div>
 <div class="modal-overlay" id="modal-evidence">
   <div class="modal-box">
     <button class="modal-close-x" id="evidence-close">✕</button>
@@ -1353,12 +1363,20 @@ svg.leaflet-image-layer.leaflet-interactive path {
     <div class="hint">Tire uma foto ou grave um vídeo curto com a coordenada e a data/hora gravadas nele — sem que isso vire parte de nenhum relatório. Depois é só baixar ou compartilhar o arquivo direto pelo celular.</div>
 
     <div id="evidence-subject-box" style="margin-top:12px; padding:10px; border:2px solid #b08a45; border-radius:10px; background:rgba(176,138,69,0.10);">
-      <label class="field-label" style="margin-top:0;">📌 Assunto fixo (entra em TODAS as fotos e vídeos até você trocar ou apagar)</label>
-      <div style="display:flex; gap:8px;">
-        <input type="text" id="evidence-subject" placeholder="Ex: Viatura 1234567" autocomplete="off" style="flex:1; min-width:0;">
-        <button class="btn ghost" id="evidence-subject-clear" type="button" title="Apagar assunto">🧹</button>
+      <label class="field-label" style="margin-top:0;">📌 Identificação (vale para TODAS as fotos e vídeos até você trocar ou apagar)</label>
+      <input type="text" id="evidence-subject" placeholder="Assunto — Ex: Viatura 1234567" autocomplete="off">
+      <label class="field-label">Nota / OS</label>
+      <input type="text" id="evidence-nota" placeholder="Ex: Nota 12345 / OS 6789" autocomplete="off">
+      <label class="field-label">Equipe</label>
+      <select id="evidence-equipe"></select>
+      <label class="field-label">Supervisor</label>
+      <select id="evidence-supervisor"></select>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">
+        <button class="btn ghost" id="evidence-new-subject" type="button">🆕 Novo assunto</button>
+        <button class="btn ghost" id="evidence-from-report" type="button">📋 Usar dados de um relatório</button>
+        <button class="btn ghost" id="evidence-clear-all" type="button">🧹 Limpar tudo</button>
       </div>
-      <div class="hint" id="evidence-subject-hint" style="margin-top:6px;">Digite uma vez só. Nas próximas fotos/vídeos, escreva apenas o comentário (ex: pneu careca).</div>
+      <div class="hint" id="evidence-subject-hint" style="margin-top:6px;">Preencha uma vez. Nas próximas fotos/vídeos, escreva apenas o comentário (ex: pneu careca). O Assunto sai em letra normal; Nota/OS, Equipe e Supervisor saem em letra pequena, como nas fotos do relatório. "Novo assunto" troca só o assunto (ex: outra viatura) e mantém o resto.</div>
     </div>
     <div id="evidence-mode-select" style="display:flex; gap:10px; margin:14px 0;">
       <button class="btn gold" style="flex:1;" id="evidence-mode-photo">📷 Foto</button>
@@ -5293,6 +5311,7 @@ document.getElementById('btn-new-report').addEventListener('click', async () => 
   updateNewReportNamePreview();
   const defaults = (await dbGet('settings', 'default')) || {};
   document.getElementById('new-report-nota').value = '';
+  document.getElementById('new-report-assunto').value = '';
   fillCadSelect(document.getElementById('new-report-municipio'), defaults.municipios, '');
   fillCadSelect(document.getElementById('new-report-equipe'), defaults.equipes, '');
   fillCadSelect(document.getElementById('new-report-supervisor'), defaults.supervisores, defaults.supervisor || '');
@@ -5315,6 +5334,7 @@ document.getElementById('modal-new-report-save').addEventListener('click', async
   const municipio = document.getElementById('new-report-municipio').value.trim();
   const equipe = document.getElementById('new-report-equipe').value.trim();
   const supervisor = document.getElementById('new-report-supervisor').value.trim();
+  const assunto = document.getElementById('new-report-assunto').value.trim();
   if (!baseName) { alert('Digite um nome para o relatório.'); return; }
 
   // O nome final sempre recebe o complemento automático da data (8 dígitos).
@@ -5330,7 +5350,7 @@ document.getElementById('modal-new-report-save').addEventListener('click', async
   }
 
   const report = { id: uid(), name, createdAt: Date.now(), localFolderName: sanitizeFilename(name),
-    nota, municipio, equipe, supervisor };
+    nota, municipio, equipe, supervisor, assunto };
   await dbPut('reports', report);
   registrarRelatorioCriado(); // conta pra cota mensal do plano Grátis (não bloqueia se falhar)
 
@@ -6864,7 +6884,7 @@ async function processImage(img, coord, capturedAt, poleLabel, isBase, report) {
     ]);
   }
   const rotulo = poleLabel + (isBase ? ' (pé do poste)' : '');
-  drawLocationWatermark(workCanvas, coord, dateObj, [rotulo], mapTileImg, cidade, currentWatermarkOpacity, linhasAuditoriaRelatorio(report, coord));
+  drawLocationWatermark(workCanvas, coord, dateObj, [report && report.assunto ? report.assunto : '', rotulo].filter(Boolean), mapTileImg, cidade, currentWatermarkOpacity, linhasAuditoriaRelatorio(report, coord));
   drawDiscreteCompanyMark(workCanvas);
   drawRevistecMark(workCanvas);
 
@@ -7496,30 +7516,93 @@ function drawDiscreteCompanyMark(canvas) {
 // localização (mapinha + pino + coordenada/data + descrição) no canto
 // inferior esquerdo, e a logo/nome da empresa discretamente no canto
 // superior direito.
-// ---- Assunto fixo das fotos/vídeos avulsos (ex.: número da viatura) ----
-const EVIDENCE_SUBJECT_KEY = 'fotoprova_evidence_subject';
-function getEvidenceSubject() {
-  const el = document.getElementById('evidence-subject');
-  return el ? el.value.trim() : '';
+// ---- Identificação fixa das fotos/vídeos avulsos ----
+// Assunto (ex.: nº da viatura), Nota/OS, Equipe e Supervisor — preenchidos uma vez
+// e aplicados a todas as fotos/vídeos avulsos seguintes, como no relatório.
+const EVIDENCE_IDENT_KEY = 'fotoprova_evidence_ident';
+function getEvidenceIdent() {
+  const v = (id) => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+  return { assunto: v('evidence-subject'), nota: v('evidence-nota'), equipe: v('evidence-equipe'), supervisor: v('evidence-supervisor') };
 }
-function saveEvidenceSubject() {
-  try { localStorage.setItem(EVIDENCE_SUBJECT_KEY, getEvidenceSubject()); } catch (e) { /* não crítico */ }
+function getEvidenceSubject() { return getEvidenceIdent().assunto; }
+// Linhas pequenas (auditoria), uma por linha — mesmo formato das fotos do relatório.
+function evidenceAuditLines() {
+  const i = getEvidenceIdent();
+  const l = [];
+  if (i.nota) l.push('Nota/OS: ' + i.nota);
+  if (i.equipe) l.push('Equipe: ' + i.equipe);
+  if (i.supervisor) l.push('Supervisor: ' + i.supervisor);
+  return l;
 }
-function loadEvidenceSubject() {
-  let v = '';
-  try { v = localStorage.getItem(EVIDENCE_SUBJECT_KEY) || ''; } catch (e) { /* ignora */ }
-  const el = document.getElementById('evidence-subject');
-  if (el) el.value = v;
+function saveEvidenceIdent() {
+  try { localStorage.setItem(EVIDENCE_IDENT_KEY, JSON.stringify(getEvidenceIdent())); } catch (e) { /* não crítico */ }
+}
+function definirValorSelect(sel, v) {
+  v = v || '';
+  if (v && ![...sel.options].some((o) => o.value === v)) {
+    const o = document.createElement('option'); o.value = v; o.textContent = v; sel.appendChild(o);
+  }
+  sel.value = v;
+}
+async function loadEvidenceIdent() {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(EVIDENCE_IDENT_KEY) || 'null') || {}; } catch (e) { saved = {}; }
+  if (saved.assunto === undefined) { // migra o assunto salvo na versão anterior
+    try { saved.assunto = localStorage.getItem('fotoprova_evidence_subject') || ''; } catch (e) { saved.assunto = ''; }
+  }
+  let defaults = {};
+  try { defaults = (await dbGet('settings', 'default')) || {}; } catch (e) { defaults = {}; }
+  document.getElementById('evidence-subject').value = saved.assunto || '';
+  document.getElementById('evidence-nota').value = saved.nota || '';
+  fillCadSelect(document.getElementById('evidence-equipe'), defaults.equipes, saved.equipe || '');
+  fillCadSelect(document.getElementById('evidence-supervisor'), defaults.supervisores, saved.supervisor || '');
 }
 function evidenceFilePrefix() {
   const a = getEvidenceSubject();
   return (a ? sanitizeFilename(a) + '_' : '') + 'evidencia_';
 }
-document.addEventListener('DOMContentLoaded', loadEvidenceSubject);
-document.getElementById('evidence-subject').addEventListener('input', saveEvidenceSubject);
-document.getElementById('evidence-subject-clear').addEventListener('click', () => {
+['evidence-subject', 'evidence-nota'].forEach((id) => document.getElementById(id).addEventListener('input', saveEvidenceIdent));
+['evidence-equipe', 'evidence-supervisor'].forEach((id) => document.getElementById(id).addEventListener('change', saveEvidenceIdent));
+document.getElementById('evidence-new-subject').addEventListener('click', () => {
   const el = document.getElementById('evidence-subject');
-  el.value = ''; saveEvidenceSubject(); el.focus();
+  el.value = ''; saveEvidenceIdent(); el.focus(); // troca só o assunto; Nota/Equipe/Supervisor ficam
+});
+document.getElementById('evidence-clear-all').addEventListener('click', () => {
+  document.getElementById('evidence-subject').value = '';
+  document.getElementById('evidence-nota').value = '';
+  document.getElementById('evidence-equipe').value = '';
+  document.getElementById('evidence-supervisor').value = '';
+  saveEvidenceIdent();
+});
+function aplicarRelatorioNaEvidencia(r) {
+  document.getElementById('evidence-nota').value = r.nota || '';
+  definirValorSelect(document.getElementById('evidence-equipe'), r.equipe);
+  definirValorSelect(document.getElementById('evidence-supervisor'), r.supervisor);
+  if (r.assunto) document.getElementById('evidence-subject').value = r.assunto;
+  saveEvidenceIdent();
+  document.getElementById('modal-evidence-pick-report').classList.remove('show');
+  mostrarToast('✅ Dados do relatório aplicados');
+}
+document.getElementById('evidence-from-report').addEventListener('click', async () => {
+  const list = document.getElementById('evidence-report-list');
+  list.innerHTML = '<div class="hint">Carregando...</div>';
+  document.getElementById('modal-evidence-pick-report').classList.add('show');
+  let reps = [];
+  try { reps = await dbGetAll('reports'); } catch (e) { reps = []; }
+  reps.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  list.innerHTML = '';
+  if (!reps.length) { list.innerHTML = '<div class="hint">Nenhum relatório criado ainda.</div>'; return; }
+  reps.forEach((r) => {
+    const b = document.createElement('button');
+    b.className = 'btn ghost full';
+    b.style.marginTop = '8px'; b.style.textAlign = 'left';
+    b.textContent = r.name + (r.nota ? ' — ' + r.nota : '');
+    b.addEventListener('click', () => aplicarRelatorioNaEvidencia(r));
+    list.appendChild(b);
+  });
+});
+document.getElementById('evidence-pick-close').addEventListener('click', () => {
+  document.getElementById('modal-evidence-pick-report').classList.remove('show');
 });
 
 async function buildEvidenceStampedPhoto(img, coord, capturedAt, description, shapes) {
@@ -7532,7 +7615,7 @@ async function buildEvidenceStampedPhoto(img, coord, capturedAt, description, sh
     try { cidade = await buscarCidadePorCoordenada(coord.lat, coord.lng); } catch (e) { cidade = null; }
   }
   await getRevistecMarkImg();
-  drawLocationWatermark(canvas, coord, dateObj, [getEvidenceSubject(), description].filter(Boolean), mapTileImg, cidade, currentWatermarkOpacity);
+  drawLocationWatermark(canvas, coord, dateObj, [getEvidenceSubject(), description].filter(Boolean), mapTileImg, cidade, currentWatermarkOpacity, evidenceAuditLines());
   drawDiscreteCompanyMark(canvas);
   drawRevistecMark(canvas);
   // Redesenha por cima as anotações (seta/texto) feitas no editor, se houver
@@ -7549,7 +7632,7 @@ async function buildEvidenceStampedPhoto(img, coord, capturedAt, description, sh
 }
 
 function openEvidenceModal() {
-  loadEvidenceSubject();
+  loadEvidenceIdent();
   document.getElementById('evidence-video-label').value = '';
   document.getElementById('evidence-photo-desc').value = '';
   document.getElementById('evidence-photo-area').style.display = 'none';
@@ -7783,7 +7866,7 @@ document.getElementById('evidence-video-start').addEventListener('click', async 
     const assunto = getEvidenceSubject();
     const label = document.getElementById('evidence-video-label').value.trim() || (assunto ? '' : 'Evidência de local');
     const now = new Date();
-    drawLocationWatermark(canvas, evidenceState.recordCoord, now, [assunto, label].filter(Boolean), evidenceState.videoMapTileImg, evidenceState.videoCidade, currentWatermarkOpacity);
+    drawLocationWatermark(canvas, evidenceState.recordCoord, now, [assunto, label].filter(Boolean), evidenceState.videoMapTileImg, evidenceState.videoCidade, currentWatermarkOpacity, evidenceAuditLines());
     drawDiscreteCompanyMark(canvas);
     drawRevistecMark(canvas);
     evidenceState.overlayFrameId = requestAnimationFrame(drawFrame);
