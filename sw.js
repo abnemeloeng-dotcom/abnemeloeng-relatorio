@@ -2,7 +2,7 @@
 // Objetivo: depois da primeira visita (com internet), o app deve abrir
 // e funcionar 100% mesmo sem nenhuma conexão, para uso em campo.
 
-const CACHE_NAME = 'relatorio-campo-v3'; // v3: guarda o SDK do Firebase para abrir offline + não intercepta rede de terceiros
+const CACHE_NAME = 'relatorio-campo-v4'; // v4: link da empresa (?empresa=) abre do cache; v3: SDK do Firebase offline
 const APP_SHELL = [
   './',
   './index.html',
@@ -71,13 +71,15 @@ self.addEventListener('fetch', (event) => {
 
   // 3) Arquivos do próprio app: responde NA HORA com a cópia salva (rápido e funciona
   //    sem internet) e, por trás, busca versão nova para a próxima abertura.
+  // Abrir o app por um link com parâmetro (ex.: ?empresa=K7P2QX) usa a mesma cópia salva do app.
+  const chave = req.mode === 'navigate' ? './index.html' : req;
   event.respondWith(
-    caches.match(req).then((cached) => {
+    caches.match(chave).then((cached) => {
       const networkFetch = fetch(req)
         .then((response) => {
           if (response && response.status === 200) {
             const clone = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(req, clone));
+            caches.open(CACHE_NAME).then((cache) => cache.put(chave, clone));
           }
           return response;
         })

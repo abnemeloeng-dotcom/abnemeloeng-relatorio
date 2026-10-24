@@ -1036,9 +1036,15 @@ svg.leaflet-image-layer.leaflet-interactive path {
         <div>
           <div id="account-email-line" style="font-weight:600; font-size:0.9rem;"></div>
           <div id="account-plan-line" style="font-size:0.85rem; color:var(--cinza-borda-texto, #666);"></div>
+          <div id="account-company-line" style="font-size:0.85rem; font-weight:600;"></div>
+          <div id="master-empresa-box" style="display:none; margin-top:6px;">
+            <label style="font-size:0.75rem; display:block;">Empresa ativa (master — vale para logo, listas e carimbo)</label>
+            <select id="master-empresa-select" style="min-height:34px; padding:4px 8px; max-width:100%;"></select>
+          </div>
           <div style="font-size:0.72rem; color:var(--cinza-borda-texto, #999); margin-top:2px;">Aparelho: <span id="account-device-id"></span></div>
         </div>
         <div style="display:flex; gap:8px;">
+          <button class="btn ghost" id="btn-join-company" style="min-height:34px; padding:6px 12px; white-space:nowrap; display:none;">🏢 Código da empresa</button>
           <button class="btn ghost" id="btn-admin-panel" style="min-height:34px; padding:6px 12px; white-space:nowrap; display:none;">🛠️ Admin</button>
           <button class="btn gold" id="btn-upgrade-pro" style="min-height:34px; padding:6px 12px; white-space:nowrap;">⭐ Quero ser Pro</button>
           <button class="btn ghost" id="btn-logout" style="min-height:34px; padding:6px 12px; white-space:nowrap;">Sair</button>
@@ -1300,6 +1306,10 @@ svg.leaflet-image-layer.leaflet-interactive path {
     <h3>⚙️ Configurações do cabeçalho</h3>
     <div class="hint">A logo e os dados abaixo serão usados no cabeçalho de todos os relatórios em PDF. Escolha a imagem da logo e toque em "Salvar configurações".</div>
     <div class="hint" id="settings-sync-status" style="display:none;"></div>
+    <div id="settings-empresa-box" style="display:none; margin-top:10px;">
+      <label class="field-label" style="margin-top:0;">🏢 Empresa que você está editando</label>
+      <select id="settings-empresa-select"></select>
+    </div>
     <label class="field-label">Logo da empresa — será exibida no PDF</label>
     <input type="file" accept="image/*" id="settings-logo-input">
     <img id="settings-logo-preview" class="settings-preview-logo" style="display:none;">
@@ -1432,11 +1442,22 @@ svg.leaflet-image-layer.leaflet-interactive path {
 </div>
 
 <!-- ============ MODAL: painel de administrador (só aparece para o e-mail admin) ============ -->
+<div class="modal-overlay" id="modal-join-company" style="z-index:100000;">
+  <div class="modal-box">
+    <h3>🏢 Código da sua empresa</h3>
+    <div class="hint">Digite o código que o responsável da sua empresa passou. Ele libera a logo e os dados da sua empresa neste app.</div>
+    <input type="text" id="join-company-code" placeholder="Ex: K7P2QX" autocomplete="off" autocapitalize="characters" style="margin-top:10px; text-transform:uppercase; letter-spacing:2px;">
+    <div class="hint" id="join-company-error" style="display:none; color:var(--vermelho);"></div>
+    <button class="btn gold full" id="join-company-submit" style="margin-top:10px;">Entrar na empresa</button>
+    <button class="btn ghost full" id="join-company-later" style="margin-top:8px;">Agora não</button>
+  </div>
+</div>
 <div class="modal-overlay" id="modal-admin">
   <div class="modal-box">
     <button class="modal-close-x" id="admin-close">✕</button>
     <h3>🛠️ Painel de administrador</h3>
-    <div class="hint">Libere ou revogue o plano Pro de qualquer conta cadastrada, sem precisar entrar no Firebase Console.</div>
+    <div class="hint">Gerencie empresas (clientes), códigos de acesso e o plano Pro de cada conta, sem precisar entrar no Firebase Console.</div>
+    <div id="admin-empresas" style="margin-top:10px;"></div>
     <input type="text" id="admin-search" placeholder="Buscar por e-mail..." style="margin-top:10px;">
     <button class="btn ghost full" id="admin-refresh" style="margin-top:8px;">🔄 Atualizar lista</button>
     <div id="admin-loading" class="hint" style="display:none;">Carregando contas...</div>
@@ -4505,47 +4526,107 @@ function ensureFirebase() {
   return _firebasePromise;
 }
 
-// Busca a configuração compartilhada na nuvem. Retorna null se a
-// sincronização não estiver ativada, se estiver offline, ou se ainda
-// não houver nada salvo na nuvem.
-async function fetchCloudSettings() {
-  if (!cloudDb) return null;
-  if (navigator.onLine === false) return null; // offline: nem tenta
+// ------------------------------------------------------------------
+// CONFIGURAÇÃO POR EMPRESA (clientes)
+// Cada empresa tem a sua ficha (logo, nome, equipes, supervisores...):
+//  - 'padrao'  = a ficha que já existia (shared_config/header_settings) = Cliente 1
+//  - demais    = documentos em empresas/{id}, criados pelo administrador
+// O usuário aponta para a sua empresa em users/{uid}.empresaId.
+//   campo ausente -> 'padrao' (contas antigas continuam como estavam)
+//   campo '' (vazio) -> conta nova que ainda não informou o código da empresa
+// ------------------------------------------------------------------
+const SETTINGS_EMPRESA_KEY = 'fotoprova_settings_empresa';
+function souAdminLogado() {
+  return !!(currentUserAccount && ADMIN_EMAILS.includes((currentUserAccount.email || '').toLowerCase()));
+}
+function empresaIdAtual() {
+  if (!currentUserAccount) return 'padrao';
+  const e = currentUserAccount.empresaId;
+  if (e === undefined || e === null) return 'padrao';
+  if (e === '' && souAdminLogado()) return 'padrao';
+  return e || null; // null = sem empresa
+}
+function refEmpresa(id) {
+  if (!cloudDb || !id) return null;
+  return id === 'padrao'
+    ? cloudDb.collection(CLOUD_COLLECTION).doc(CLOUD_DOC_ID)
+    : cloudDb.collection('empresas').doc(id);
+}
+// { ok: conseguiu falar com a nuvem, exists: a ficha existe, data }
+async function fetchCloudSettingsDetalhado(empresaId) {
+  const ref = refEmpresa(empresaId === undefined ? empresaIdAtual() : empresaId);
+  if (!ref) return { ok: false, exists: false, data: null };
+  if (navigator.onLine === false) return { ok: false, exists: false, data: null }; // offline: nem tenta
   try {
-    const snap = await withTimeout(cloudDb.collection(CLOUD_COLLECTION).doc(CLOUD_DOC_ID).get({ source: 'server' }), 4000);
-    if (!snap.exists) return null;
-    return snap.data();
+    const snap = await withTimeout(ref.get({ source: 'server' }), 4000);
+    return { ok: true, exists: snap.exists, data: snap.exists ? snap.data() : null };
   } catch (e) {
     console.warn('Falha ao buscar configuração na nuvem (usando cópia local):', e);
-    return null;
+    return { ok: false, exists: false, data: null };
   }
 }
-
-// Envia a configuração para a nuvem, para todo mundo que abrir o link
-// passar a ver essa mesma configuração.
-async function pushCloudSettings(settings) {
-  if (!cloudDb) return false;
+async function fetchCloudSettings(empresaId) {
+  const r = await fetchCloudSettingsDetalhado(empresaId);
+  return r.ok && r.exists ? r.data : null;
+}
+// Envia a configuração da empresa para a nuvem (só o administrador consegue).
+async function pushCloudSettings(settings, empresaId) {
+  const ref = refEmpresa(empresaId === undefined ? empresaIdAtual() : empresaId);
+  if (!ref) return false;
   try {
     const payload = Object.assign({}, settings, { updatedAt: Date.now() });
-    await cloudDb.collection(CLOUD_COLLECTION).doc(CLOUD_DOC_ID).set(payload);
+    await ref.set(payload, { merge: true });
     return true;
   } catch (e) {
     console.warn('Falha ao enviar configuração para a nuvem:', e);
     return false;
   }
 }
-
-// Ao abrir o app: se a sincronização estiver ativa, baixa a
-// configuração da nuvem e atualiza a cópia local (IndexedDB), para que
-// telas de geração de PDF/KMZ etc. (que leem só do IndexedDB) já usem
-// a versão mais recente mesmo sem o usuário abrir a tela de
-// configurações.
+// Ao entrar: baixa a ficha da EMPRESA deste usuário e atualiza a cópia local (IndexedDB),
+// de onde saem o PDF, o carimbo etc. Uma empresa nova, ainda sem ficha, não herda a logo de outra.
 async function syncSettingsFromCloudOnLoad() {
   if (!CLOUD_SYNC_ENABLED) return;
-  const cloud = await fetchCloudSettings();
-  if (cloud) {
-    await dbPut('settings', Object.assign({ id: 'default' }, cloud));
+  const id = empresaIdAtual();
+  if (!id) {
+    // Conta sem empresa: não herda logo/dados de quem usou este aparelho antes.
+    let marcado = null;
+    try { marcado = localStorage.getItem(SETTINGS_EMPRESA_KEY); } catch (e) { /* ignora */ }
+    if (marcado) {
+      await dbPut('settings', { id: 'default', watermarkOpacity: 0.7, municipios: [], equipes: [], supervisores: [] });
+      try { localStorage.removeItem(SETTINGS_EMPRESA_KEY); } catch (e) { /* ignora */ }
+    }
+    return;
   }
+  const r = await fetchCloudSettingsDetalhado(id);
+  if (!r.ok) return;
+  let marcado = null;
+  try { marcado = localStorage.getItem(SETTINGS_EMPRESA_KEY); } catch (e) { /* ignora */ }
+  if (r.exists) {
+    await dbPut('settings', Object.assign({ id: 'default' }, r.data));
+  } else if (marcado !== id && (marcado || id !== 'padrao')) {
+    await dbPut('settings', { id: 'default', watermarkOpacity: 0.7, municipios: [], equipes: [], supervisores: [] });
+  }
+  try { localStorage.setItem(SETTINGS_EMPRESA_KEY, id); } catch (e) { /* ignora */ }
+  atualizarLinhaEmpresa();
+}
+
+// Lista de empresas (só o administrador consegue ler todas).
+let adminEmpresasCache = [];
+async function carregarEmpresasAdmin() {
+  const lista = [{ id: 'padrao', nome: 'Empresa padrão' }];
+  try {
+    const sn = await cloudDb.collection(CLOUD_COLLECTION).doc(CLOUD_DOC_ID).get();
+    if (sn.exists && sn.data().companyName) lista[0].nome = sn.data().companyName;
+  } catch (e) { /* mantém o nome padrão */ }
+  try {
+    const snap = await cloudDb.collection('empresas').get();
+    snap.forEach((d) => lista.push({ id: d.id, nome: d.data().companyName || d.data().nome || '(sem nome)' }));
+    const cs = await cloudDb.collection('codigos').get();
+    const porEmpresa = {};
+    cs.forEach((d) => { porEmpresa[d.data().empresaId] = d.id; });
+    lista.forEach((e) => { e.codigo = porEmpresa[e.id] || ''; });
+  } catch (e) { console.warn('Não consegui carregar empresas/códigos:', e); }
+  adminEmpresasCache = lista;
 }
 
 // ============================================================
@@ -4590,6 +4671,20 @@ const CURRENT_DEVICE_ID = getOrCreateDeviceId();
 const AUTH_CACHE_KEY = 'fotoprova_last_user';
 const SIGNOUT_PENDING_KEY = 'fotoprova_signout_pending';
 const PENDING_REPORTS_KEY = 'fotoprova_pending_reports';
+// Link de instalação da empresa: seusite/?empresa=CODIGO. O código fica guardado no aparelho
+// até a conta ser criada/entrar; aí o app vincula o colaborador à empresa sozinho.
+const PENDING_COMPANY_KEY = 'fotoprova_pending_company_code';
+(function capturarCodigoDoLink() {
+  try {
+    const params = new URLSearchParams(location.search);
+    const c = (params.get('empresa') || '').trim().toUpperCase();
+    if (!c) return;
+    localStorage.setItem(PENDING_COMPANY_KEY, c);
+    params.delete('empresa');
+    const qs = params.toString();
+    history.replaceState(null, '', location.pathname + (qs ? '?' + qs : '') + location.hash);
+  } catch (e) { /* sem problema: o código manual continua funcionando */ }
+})();
 
 // Logo oficial do app (marca Revistec), embutida como imagem para ser
 // desenhada sempre no canto superior ESQUERDO de toda foto/vídeo gerado
@@ -4706,7 +4801,7 @@ async function onUserLoggedIn(user) {
   }
 
   if (!data) {
-    data = { email: user.email || '', plan: 'free', reportsThisMonth: 0, reportsTotal: 0, monthKey, createdAt: Date.now(), authorizedDeviceId: null, lastSeenDeviceId: CURRENT_DEVICE_ID };
+    data = { email: user.email || '', plan: 'free', reportsThisMonth: 0, reportsTotal: 0, monthKey, createdAt: Date.now(), authorizedDeviceId: null, lastSeenDeviceId: CURRENT_DEVICE_ID, empresaId: ADMIN_EMAILS.includes((user.email || '').toLowerCase()) ? 'padrao' : '' };
     if (onlineOk) {
       try { await withTimeout(ref.set(data), 3000); } catch (e) { console.warn('Falha ao criar conta no banco:', e); }
     }
@@ -4739,8 +4834,131 @@ async function onUserLoggedIn(user) {
     patch.reportsTotal = data.reportsTotal;
     withTimeout(ref.update(patch), 5000).catch(() => { /* não crítico */ });
   }
+
+  // Ficha da empresa deste usuário (logo, equipes...) e convite para informar o código.
+  try { await syncSettingsFromCloudOnLoad(); } catch (e) { console.warn('Sincronização da empresa falhou:', e); }
+  verificarEntradaEmpresa();
 }
 
+// ---- Entrar numa empresa pelo código (cada cliente passa o código aos colaboradores) ----
+let avisoEmpresaMostrado = false;
+function limparCodigoPendente() { try { localStorage.removeItem(PENDING_COMPANY_KEY); } catch (e) { /* ignora */ } }
+async function verificarEntradaEmpresa() {
+  if (!currentUserAccount) return;
+  let pendente = '';
+  try { pendente = localStorage.getItem(PENDING_COMPANY_KEY) || ''; } catch (e) { /* ignora */ }
+  if (souAdminLogado() || currentUserAccount.empresaId !== '') {
+    if (pendente) limparCodigoPendente(); // já tem empresa (ou é o master): o link não muda nada
+    return;
+  }
+  // Conta sem empresa: tenta entrar pelo código que veio no link de instalação.
+  if (pendente) {
+    try {
+      await entrarEmpresaPorCodigo(pendente);
+      limparCodigoPendente();
+      mostrarToast('✅ Você entrou na empresa');
+      return;
+    } catch (e) {
+      if (/não encontrado/i.test(e.message)) { limparCodigoPendente(); pendente = ''; } // link com código antigo
+      // outros erros (sem internet): mantém o código para tentar de novo
+    }
+  }
+  if (!avisoEmpresaMostrado) {
+    avisoEmpresaMostrado = true;
+    abrirModalEntrarEmpresa();
+    if (pendente) document.getElementById('join-company-code').value = pendente;
+  }
+}
+function abrirModalEntrarEmpresa() {
+  document.getElementById('join-company-error').style.display = 'none';
+  document.getElementById('join-company-code').value = '';
+  document.getElementById('modal-join-company').classList.add('show');
+}
+async function entrarEmpresaPorCodigo(codigo) {
+  if (!currentUserUid) throw new Error('Faça login primeiro.');
+  if (!(await ensureFirebase())) throw new Error('Sem internet agora. Para entrar na empresa é preciso estar conectado uma vez.');
+  let snap;
+  try { snap = await withTimeout(cloudDb.collection('codigos').doc(codigo).get({ source: 'server' }), 8000); }
+  catch (e) { throw new Error('Não consegui verificar o código agora. Confira a internet e tente de novo.'); }
+  if (!snap.exists) throw new Error('Código não encontrado. Confira com o responsável da sua empresa.');
+  const empresaId = snap.data().empresaId;
+  try { await withTimeout(cloudDb.collection('users').doc(currentUserUid).update({ empresaId, codigoUsado: codigo }), 8000); }
+  catch (e) { throw new Error('Não consegui vincular sua conta agora. Tente de novo.'); }
+  currentUserAccount.empresaId = empresaId;
+  currentUserAccount.codigoUsado = codigo;
+  try { localStorage.setItem('fotoprova_account_' + currentUserUid, JSON.stringify(currentUserAccount)); } catch (e) { /* não crítico */ }
+  renderAccountStatus();
+  await syncSettingsFromCloudOnLoad();
+}
+document.getElementById('master-empresa-select').addEventListener('change', async (ev) => {
+  const novo = ev.target.value;
+  if (navigator.onLine === false || !(await ensureFirebase())) {
+    alert('Para trocar a empresa ativa é preciso estar online.');
+    prepararSeletorMaster();
+    return;
+  }
+  try {
+    await withTimeout(cloudDb.collection('users').doc(currentUserUid).update({ empresaId: novo }), 8000);
+    currentUserAccount.empresaId = novo;
+    try { localStorage.setItem('fotoprova_account_' + currentUserUid, JSON.stringify(currentUserAccount)); } catch (e) { /* não crítico */ }
+    await syncSettingsFromCloudOnLoad();
+    renderAccountStatus();
+    const emp = adminEmpresasCache.find((x) => x.id === novo);
+    mostrarToast('🏢 Empresa ativa: ' + (emp ? emp.nome : novo));
+  } catch (e) {
+    alert('Não consegui trocar a empresa: ' + e.message);
+    prepararSeletorMaster();
+  }
+});
+document.getElementById('btn-join-company').addEventListener('click', abrirModalEntrarEmpresa);
+document.getElementById('join-company-later').addEventListener('click', () => {
+  document.getElementById('modal-join-company').classList.remove('show');
+});
+document.getElementById('join-company-submit').addEventListener('click', async () => {
+  const errEl = document.getElementById('join-company-error');
+  const btn = document.getElementById('join-company-submit');
+  const codigo = document.getElementById('join-company-code').value.trim().toUpperCase();
+  if (codigo.length < 4) { errEl.textContent = 'Digite o código que a sua empresa passou.'; errEl.style.display = ''; return; }
+  btn.disabled = true;
+  errEl.textContent = 'Verificando...'; errEl.style.display = '';
+  try {
+    await entrarEmpresaPorCodigo(codigo);
+    document.getElementById('modal-join-company').classList.remove('show');
+    mostrarToast('✅ Você entrou na empresa');
+  } catch (e) {
+    errEl.textContent = e.message; errEl.style.display = '';
+  }
+  btn.disabled = false;
+});
+
+// Master: escolhe com qual empresa está trabalhando (logo, equipes, supervisores, carimbo).
+async function prepararSeletorMaster() {
+  const box = document.getElementById('master-empresa-box');
+  const sel = document.getElementById('master-empresa-select');
+  if (!box || !sel || !cloudDb) { if (box) box.style.display = 'none'; return; }
+  if (!adminEmpresasCache.length && navigator.onLine !== false) { try { await carregarEmpresasAdmin(); } catch (e) { /* ignora */ } }
+  if (!adminEmpresasCache.length) { box.style.display = 'none'; return; }
+  sel.innerHTML = adminEmpresasCache.map((e) => `<option value="${String(e.id).replace(/"/g, '&quot;')}">${String(e.nome || '').replace(/</g, '&lt;')}</option>`).join('');
+  sel.value = empresaIdAtual() || 'padrao';
+  box.style.display = '';
+}
+async function atualizarLinhaEmpresa() {
+  const el = document.getElementById('account-company-line');
+  const btn = document.getElementById('btn-join-company');
+  if (!el || !btn || !currentUserAccount) return;
+  const boxMaster = document.getElementById('master-empresa-box');
+  if (boxMaster) boxMaster.style.display = 'none';
+  if (souAdminLogado()) { el.textContent = ''; btn.style.display = 'none'; await prepararSeletorMaster(); return; }
+  if (currentUserAccount.empresaId === '') {
+    el.textContent = '🏢 Sem empresa vinculada';
+    btn.style.display = ''; btn.textContent = '🏢 Informar código da empresa';
+    return;
+  }
+  let nome = '';
+  try { const st = await dbGet('settings', 'default'); nome = (st && st.companyName) || ''; } catch (e) { /* ignora */ }
+  el.textContent = nome ? '🏢 ' + nome : '';
+  btn.style.display = ''; btn.textContent = '🏢 Trocar empresa';
+}
 function renderAccountStatus() {
   const card = document.getElementById('account-status-card');
   if (!currentUserAccount) { card.style.display = 'none'; return; }
@@ -4752,12 +4970,15 @@ function renderAccountStatus() {
   const usageText = isPro
     ? `Relatórios ilimitados — ${currentUserAccount.reportsTotal || 0} no total`
     : `${currentUserAccount.reportsThisMonth || 0}/${FREE_REPORT_LIMIT} relatórios este mês — ${currentUserAccount.reportsTotal || 0} no total`;
-  let rotuloPlano = isAdmin ? 'Admin ⭐' : (isPro ? 'Pro ⭐' : 'Grátis');
+  let rotuloPlano = isAdmin ? 'Master ⭐ (ilimitado)' : (isPro ? 'Pro ⭐' : 'Grátis');
   if (proBloqueadoPorAparelho) rotuloPlano = 'Grátis (Pro vinculado a outro aparelho)';
   document.getElementById('account-plan-line').textContent = `Plano: ${rotuloPlano} — ${usageText}`;
   document.getElementById('account-device-id').textContent = CURRENT_DEVICE_ID;
   document.getElementById('btn-admin-panel').style.display = isAdmin ? '' : 'none';
   document.getElementById('btn-upgrade-pro').style.display = isPro ? 'none' : '';
+  // Logo e dados da empresa: só o administrador altera (o cliente solicita e o administrador atualiza).
+  document.getElementById('btn-settings-shortcut').style.display = isAdmin ? '' : 'none';
+  atualizarLinhaEmpresa();
 }
 
 // Verifica se a conta ainda pode criar mais um relatório este mês. Sem
@@ -4875,6 +5096,94 @@ if (CLOUD_SYNC_ENABLED) {
 
   // ---- painel de administrador ----
   let adminUsersCache = [];
+  let adminFiltroEmpresa = '';
+  const escAdmin = (t) => String(t == null ? '' : t).replace(/</g, '&lt;').replace(/"/g, '&quot;');
+  const empresaDoUser = (u) => (u.empresaId === undefined || u.empresaId === null) ? 'padrao' : u.empresaId;
+
+  async function criarCodigoEmpresa(empresaId) {
+    const alfabeto = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    for (let t = 0; t < 6; t++) {
+      let c = '';
+      for (let i = 0; i < 6; i++) c += alfabeto[Math.floor(Math.random() * alfabeto.length)];
+      const ref = cloudDb.collection('codigos').doc(c);
+      if ((await ref.get()).exists) continue;
+      const emp = adminEmpresasCache.find((e) => e.id === empresaId);
+      if (emp && emp.codigo) { try { await cloudDb.collection('codigos').doc(emp.codigo).delete(); } catch (e) { /* ignora */ } }
+      await ref.set({ empresaId, criadoEm: Date.now() });
+      if (emp) emp.codigo = c;
+      return c;
+    }
+    throw new Error('Não consegui gerar um código único. Tente de novo.');
+  }
+
+  function renderizarEmpresasAdmin() {
+    const box = document.getElementById('admin-empresas');
+    const contagem = {};
+    adminUsersCache.forEach((u) => { const k = empresaDoUser(u); contagem[k] = (contagem[k] || 0) + 1; });
+    box.innerHTML = '<div style="font-weight:700; margin-bottom:6px;">🏢 Empresas (clientes)</div>' +
+      adminEmpresasCache.map((e) => `
+        <div style="padding:8px; border:1px solid var(--cinza-borda); border-radius:8px; margin-bottom:6px;">
+          <div style="font-weight:600; font-size:0.88rem;">${escAdmin(e.nome)}${e.id === 'padrao' ? ' <span style="font-weight:400; opacity:0.7;">(cliente 1 — empresa padrão)</span>' : ''}</div>
+          <div style="font-size:0.78rem; color:var(--texto-suave); margin:2px 0 6px;">${contagem[e.id] || 0} usuário(s) · Código: <strong style="letter-spacing:1px;">${e.codigo ? escAdmin(e.codigo) : '—'}</strong></div>
+          <div style="display:flex; gap:6px; flex-wrap:wrap;">
+            <button class="btn ghost admin-emp-edit" data-emp="${escAdmin(e.id)}" style="min-height:32px; padding:6px 10px;">✏️ Logo e dados</button>
+            <button class="btn ghost admin-emp-code" data-emp="${escAdmin(e.id)}" style="min-height:32px; padding:6px 10px;">🔑 ${e.codigo ? 'Novo código' : 'Gerar código'}</button>
+            ${e.codigo ? `<button class="btn gold admin-emp-link" data-code="${escAdmin(e.codigo)}" style="min-height:32px; padding:6px 10px;">🔗 Copiar link de instalação</button>` : ''}
+            ${e.codigo ? `<button class="btn ghost admin-emp-copy" data-code="${escAdmin(e.codigo)}" style="min-height:32px; padding:6px 10px;">📋 Copiar código</button>` : ''}
+          </div>
+        </div>`).join('') +
+      '<button class="btn gold full" id="admin-nova-empresa" style="margin-top:4px;">➕ Nova empresa (cliente)</button>' +
+      '<label class="field-label">Mostrar usuários da empresa</label>' +
+      `<select id="admin-filtro-empresa"><option value="">Todas as empresas</option>${adminEmpresasCache.map((e) => `<option value="${escAdmin(e.id)}"${adminFiltroEmpresa === e.id ? ' selected' : ''}>${escAdmin(e.nome)}</option>`).join('')}</select>`;
+
+    box.querySelectorAll('.admin-emp-edit').forEach((btn) => btn.addEventListener('click', () => {
+      document.getElementById('modal-admin').classList.remove('show');
+      openSettingsModal(btn.dataset.emp);
+    }));
+    box.querySelectorAll('.admin-emp-code').forEach((btn) => btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      try {
+        const c = await criarCodigoEmpresa(btn.dataset.emp);
+        renderizarEmpresasAdmin();
+        alert('Código da empresa: ' + c + '\n\nPasse este código aos colaboradores. Eles digitam ao entrar no app.');
+      } catch (e) { alert('Não consegui gerar o código: ' + e.message); btn.disabled = false; }
+    }));
+    box.querySelectorAll('.admin-emp-link').forEach((btn) => btn.addEventListener('click', async () => {
+      const base = location.origin + location.pathname.replace(/index\.html$/, '');
+      const link = base + '?empresa=' + btn.dataset.code;
+      const msg = 'Olá! Para usar o Revistec, abra este link no celular, instale o app na tela inicial e crie o seu login:\n' + link;
+      try { await navigator.clipboard.writeText(msg); mostrarToast('🔗 Link copiado — é só colar no WhatsApp'); }
+      catch (e) { prompt('Copie a mensagem com o link:', msg); }
+    }));
+    box.querySelectorAll('.admin-emp-copy').forEach((btn) => btn.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(btn.dataset.code); mostrarToast('📋 Código copiado'); }
+      catch (e) { prompt('Copie o código:', btn.dataset.code); }
+    }));
+    document.getElementById('admin-nova-empresa').addEventListener('click', async (ev) => {
+      const nome = (prompt('Nome da nova empresa (cliente):') || '').trim();
+      if (!nome) return;
+      const btn = ev.currentTarget;
+      btn.disabled = true;
+      try {
+        const ref = cloudDb.collection('empresas').doc();
+        await ref.set({ companyName: nome, address: '', responsible: '', watermarkOpacity: 0.7, logoDataUrl: null, municipios: [], equipes: [], supervisores: [], criadoEm: Date.now(), updatedAt: Date.now() });
+        adminEmpresasCache.push({ id: ref.id, nome, codigo: '' });
+        const c = await criarCodigoEmpresa(ref.id);
+        renderizarEmpresasAdmin();
+        alert('Empresa criada: ' + nome + '\n\nCódigo para os colaboradores: ' + c + '\n\nToque em "✏️ Logo e dados" para cadastrar a logo, equipes e supervisores dela.');
+      } catch (e) { alert('Não consegui criar a empresa: ' + e.message); btn.disabled = false; }
+    });
+    document.getElementById('admin-filtro-empresa').addEventListener('change', (ev) => {
+      adminFiltroEmpresa = ev.target.value;
+      renderizarListaAdmin();
+    });
+  }
+  function opcoesEmpresaHtml(u) {
+    const atual = u.empresaId === undefined || u.empresaId === null ? 'padrao' : u.empresaId;
+    const opts = ['<option value=""' + (atual === '' ? ' selected' : '') + '>(sem empresa)</option>']
+      .concat(adminEmpresasCache.map((e) => `<option value="${escAdmin(e.id)}"${atual === e.id ? ' selected' : ''}>${escAdmin(e.nome)}</option>`));
+    return opts.join('');
+  }
   document.getElementById('btn-admin-panel').addEventListener('click', () => {
     document.getElementById('modal-admin').classList.add('show');
     document.getElementById('admin-search').value = '';
@@ -4892,6 +5201,7 @@ if (CLOUD_SYNC_ENABLED) {
     loading.style.display = '';
     listEl.innerHTML = '';
     try {
+      await carregarEmpresasAdmin();
       const snap = await cloudDb.collection('users').get();
       adminUsersCache = [];
       snap.forEach((doc) => adminUsersCache.push({ uid: doc.id, ...doc.data() }));
@@ -4904,9 +5214,10 @@ if (CLOUD_SYNC_ENABLED) {
   }
 
   function renderizarListaAdmin() {
+    renderizarEmpresasAdmin();
     const termo = document.getElementById('admin-search').value.trim().toLowerCase();
     const listEl = document.getElementById('admin-user-list');
-    const filtrados = adminUsersCache.filter((u) => !termo || (u.email || '').toLowerCase().includes(termo));
+    const filtrados = adminUsersCache.filter((u) => (!termo || (u.email || '').toLowerCase().includes(termo)) && (!adminFiltroEmpresa || empresaDoUser(u) === adminFiltroEmpresa));
     const totalMes = adminUsersCache.reduce((soma, u) => soma + (u.reportsThisMonth || 0), 0);
     const totalGeral = adminUsersCache.reduce((soma, u) => soma + (u.reportsTotal || 0), 0);
     const resumoHtml = `
@@ -4934,6 +5245,7 @@ if (CLOUD_SYNC_ENABLED) {
               ${isPro ? 'Tornar Grátis' : 'Tornar Pro'}
             </button>
           </div>
+          <div style="margin-top:8px; font-size:0.78rem;">Empresa: <select class="admin-empresa-select" data-uid="${u.uid}" style="min-height:32px; padding:4px 8px; max-width:70%;">${opcoesEmpresaHtml(u)}</select></div>
           <div style="margin-top:8px; padding:8px; background:var(--cinza-bg); border-radius:6px; font-size:0.76rem;">
             <div style="color:var(--texto-suave); margin-bottom:4px;">
               Último aparelho visto: <strong>${u.lastSeenDeviceId || '—'}</strong>
@@ -4963,6 +5275,22 @@ if (CLOUD_SYNC_ENABLED) {
         } catch (e) {
           alert('Não consegui salvar: ' + e.message);
           btn.disabled = false;
+        }
+      });
+    });
+    listEl.querySelectorAll('.admin-empresa-select').forEach((sel) => {
+      sel.addEventListener('change', async () => {
+        const uid = sel.dataset.uid;
+        sel.disabled = true;
+        try {
+          await cloudDb.collection('users').doc(uid).update({ empresaId: sel.value });
+          const u = adminUsersCache.find((x) => x.uid === uid);
+          if (u) u.empresaId = sel.value;
+          if (uid === currentUserUid) { currentUserAccount.empresaId = sel.value; renderAccountStatus(); syncSettingsFromCloudOnLoad(); }
+          renderizarListaAdmin();
+        } catch (e) {
+          alert('Não consegui mudar a empresa: ' + e.message);
+          sel.disabled = false;
         }
       });
     });
@@ -7381,23 +7709,52 @@ const renderEquipeList = setupCadRegistration(
 const renderSupervisorList = setupCadRegistration(
   { get: () => pendingSupervisores }, 'settings-supervisor-new', 'settings-supervisor-add', 'settings-supervisor-list');
 
-async function openSettingsModal() {
+let settingsEmpresaEditando = null;   // empresa cuja ficha está aberta no modal
+let settingsCarregouNuvemOk = false;  // conseguiu ler a ficha da nuvem (evita sobrescrever às cegas)
+async function openSettingsModal(empresaId) {
+  if (CLOUD_SYNC_ENABLED && currentUserAccount && !souAdminLogado()) {
+    alert('A logo e os dados da empresa são gerenciados pelo administrador. Para alterar, solicite ao responsável.');
+    return;
+  }
   const syncStatus = document.getElementById('settings-sync-status');
-  let s = (await dbGet('settings', 'default')) || {};
+  const minhaId = CLOUD_SYNC_ENABLED ? empresaIdAtual() : null;
+  const editId = (CLOUD_SYNC_ENABLED && typeof empresaId === 'string' && empresaId) ? empresaId : minhaId;
+  settingsEmpresaEditando = editId;
+  settingsCarregouNuvemOk = false;
+  const ehMinha = !CLOUD_SYNC_ENABLED || editId === minhaId;
+  // Outra empresa nunca parte da cópia local (que é da minha empresa).
+  let s = ehMinha ? ((await dbGet('settings', 'default')) || {}) : {};
+
+  const boxEmp = document.getElementById('settings-empresa-box');
+  if (CLOUD_SYNC_ENABLED && souAdminLogado()) {
+    boxEmp.style.display = '';
+    if (!adminEmpresasCache.length) await carregarEmpresasAdmin();
+    const sel = document.getElementById('settings-empresa-select');
+    sel.innerHTML = adminEmpresasCache.map((e) => `<option value="${String(e.id).replace(/"/g, '&quot;')}">${String(e.nome || '').replace(/</g, '&lt;')}</option>`).join('');
+    sel.value = editId;
+  } else {
+    boxEmp.style.display = 'none';
+  }
 
   if (CLOUD_SYNC_ENABLED) {
     syncStatus.style.display = '';
     syncStatus.style.color = 'inherit';
-    syncStatus.textContent = '🔄 Buscando configuração compartilhada...';
-    const cloud = await fetchCloudSettings();
-    if (cloud) {
-      s = cloud;
-      await dbPut('settings', Object.assign({ id: 'default' }, cloud));
+    syncStatus.textContent = '🔄 Buscando configuração da empresa...';
+    const r = await fetchCloudSettingsDetalhado(editId);
+    settingsCarregouNuvemOk = r.ok;
+    if (r.ok && r.exists) {
+      s = r.data;
+      if (ehMinha) await dbPut('settings', Object.assign({ id: 'default' }, r.data));
       syncStatus.style.color = 'var(--verde)';
-      syncStatus.textContent = '☁️ Configuração compartilhada carregada.';
+      syncStatus.textContent = '☁️ Configuração da empresa carregada.';
+    } else if (r.ok) {
+      syncStatus.style.color = 'var(--laranja)';
+      syncStatus.textContent = 'ℹ️ Esta empresa ainda não tem dados salvos — preencha e salve.';
     } else {
       syncStatus.style.color = 'var(--laranja)';
-      syncStatus.textContent = '⚠️ Sem conexão com a nuvem agora — mostrando a última cópia salva neste aparelho.';
+      syncStatus.textContent = ehMinha
+        ? '⚠️ Sem conexão com a nuvem agora — mostrando a última cópia salva neste aparelho.'
+        : '⚠️ Sem conexão com a nuvem — para editar outra empresa é preciso estar online.';
     }
   } else {
     syncStatus.style.display = 'none';
@@ -7422,6 +7779,7 @@ async function openSettingsModal() {
 
   document.getElementById('modal-settings').classList.add('show');
 }
+document.getElementById('settings-empresa-select').addEventListener('change', (ev) => openSettingsModal(ev.target.value));
 document.getElementById('modal-settings-close').addEventListener('click', () => {
   document.getElementById('modal-settings').classList.remove('show');
 });
@@ -7967,17 +8325,26 @@ document.getElementById('modal-settings-save').addEventListener('click', async (
     equipes: pendingEquipes.slice(),
     supervisores: pendingSupervisores.slice(),
   };
-  await dbPut('settings', settings);
-  currentWatermarkOpacity = settings.watermarkOpacity; // aplica na hora, sem precisar reabrir a evidência avulsa
+  const minhaId = CLOUD_SYNC_ENABLED ? empresaIdAtual() : null;
+  const editId = CLOUD_SYNC_ENABLED ? (settingsEmpresaEditando || minhaId) : null;
+  const ehMinha = !CLOUD_SYNC_ENABLED || editId === minhaId;
+  if (!ehMinha && !settingsCarregouNuvemOk) {
+    alert('Sem conexão com a nuvem agora. Para salvar os dados de outra empresa é preciso estar online (assim nada é sobrescrito sem querer).');
+    return;
+  }
+  if (ehMinha) {
+    await dbPut('settings', settings);
+    currentWatermarkOpacity = settings.watermarkOpacity; // aplica na hora, sem precisar reabrir a evidência avulsa
+  }
   const syncStatus = document.getElementById('settings-sync-status');
   if (CLOUD_SYNC_ENABLED) {
     syncStatus.style.display = '';
     syncStatus.style.color = 'inherit';
     syncStatus.textContent = '🔄 Enviando para todos os aparelhos...';
-    const ok = await pushCloudSettings(settings);
+    const ok = await pushCloudSettings(settings, editId);
     if (ok) {
       syncStatus.style.color = 'var(--verde)';
-      syncStatus.textContent = '✅ Salvo e compartilhado — quem abrir o link já vai ver essa configuração.';
+      syncStatus.textContent = '✅ Salvo — os colaboradores desta empresa passam a ver essa configuração.';
     } else {
       syncStatus.style.color = 'var(--vermelho)';
       syncStatus.textContent = '❌ Salvo só neste aparelho — sem conexão com a nuvem agora. Abra as configurações de novo quando estiver online para reenviar.';
@@ -8810,7 +9177,6 @@ if (CLOUD_SYNC_ENABLED) {
     }
     if (listenerAtivo) return;
     listenerAtivo = true;
-    syncSettingsFromCloudOnLoad().catch((e) => console.warn('Sincronização inicial falhou:', e));
     cloudAuth.onAuthStateChanged(async (user) => {
       if (user) {
         let saidaPendente = false;
