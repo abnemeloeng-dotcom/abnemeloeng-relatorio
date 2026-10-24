@@ -852,6 +852,11 @@ svg.leaflet-image-layer.leaflet-interactive path {
     background: rgba(0,0,0,0.6); color: #fff; border: none;
     border-radius: 6px; width: 26px; height: 26px; font-size: 0.85rem; cursor: pointer;
   }
+  .photo-tile .photo-replace {
+    position: absolute; top: 4px; right: 64px;
+    background: rgba(0,0,0,0.6); color: #fff; border: none;
+    border-radius: 6px; width: 26px; height: 26px; font-size: 0.85rem; cursor: pointer;
+  }
   .photo-tile .photo-annotate {
     position: absolute; top: 4px; right: 34px;
     background: rgba(0,0,0,0.6); color: #fff; border: none;
@@ -1116,6 +1121,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
 </div>
 
 <input type="file" accept="image/*" capture="environment" id="camera-input">
+<input type="file" accept="image/*" id="replace-photo-input" style="display:none;">
 
 <!-- ============ MODAL: legenda da foto recém-tirada ============ -->
 <div class="modal-overlay" id="modal-caption">
@@ -1346,6 +1352,14 @@ svg.leaflet-image-layer.leaflet-interactive path {
     <h3>📍 Registrar evidência de um local</h3>
     <div class="hint">Tire uma foto ou grave um vídeo curto com a coordenada e a data/hora gravadas nele — sem que isso vire parte de nenhum relatório. Depois é só baixar ou compartilhar o arquivo direto pelo celular.</div>
 
+    <div id="evidence-subject-box" style="margin-top:12px; padding:10px; border:2px solid #b08a45; border-radius:10px; background:rgba(176,138,69,0.10);">
+      <label class="field-label" style="margin-top:0;">📌 Assunto fixo (entra em TODAS as fotos e vídeos até você trocar ou apagar)</label>
+      <div style="display:flex; gap:8px;">
+        <input type="text" id="evidence-subject" placeholder="Ex: Viatura 1234567" autocomplete="off" style="flex:1; min-width:0;">
+        <button class="btn ghost" id="evidence-subject-clear" type="button" title="Apagar assunto">🧹</button>
+      </div>
+      <div class="hint" id="evidence-subject-hint" style="margin-top:6px;">Digite uma vez só. Nas próximas fotos/vídeos, escreva apenas o comentário (ex: pneu careca).</div>
+    </div>
     <div id="evidence-mode-select" style="display:flex; gap:10px; margin:14px 0;">
       <button class="btn gold" style="flex:1;" id="evidence-mode-photo">📷 Foto</button>
       <button class="btn gold" style="flex:1;" id="evidence-mode-video">🎥 Vídeo</button>
@@ -1360,7 +1374,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
         <label class="field-label" style="margin-top:10px;">Descreva o que essa foto mostra (opcional)</label>
         <input type="text" id="evidence-photo-desc" placeholder="Ex: Rachadura na base do poste, portão danificado...">
         <div class="row-actions" style="margin-top:8px;">
-          <button class="btn gold full" id="evidence-photo-apply">✅ Aplicar descrição na foto</button>
+          <button class="btn gold full" id="evidence-photo-apply">✅ Aplicar descrição/assunto na foto</button>
         </div>
         <button class="btn ghost full" id="evidence-photo-reannotate" style="margin-top:8px;">✏️ Anotar (seta, texto...)</button>
         <div class="row-actions" style="margin-top:8px;">
@@ -4345,9 +4359,6 @@ SOFTWARE.
 
 </script>
 <!-- Firebase (usado só para sincronizar a configuração de cabeçalho entre aparelhos; veja CLOUD_CONFIG mais abaixo) -->
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script>
 // ============================================================
 // App: Relatório Fotográfico de Campo
@@ -4403,22 +4414,77 @@ const CLOUD_SYNC_ENABLED = !!(CLOUD_CONFIG.apiKey && CLOUD_CONFIG.projectId);
 const ADMIN_EMAILS = ['abnemelo.eng@gmail.com'];
 const CLOUD_COLLECTION = 'shared_config';
 const CLOUD_DOC_ID = 'header_settings';
+// ------------------------------------------------------------------
+// CARREGAMENTO PREGUIÇOSO DO FIREBASE (não trava a abertura do app)
+// Antes, os 3 arquivos do Firebase eram <script src> comuns: o navegador
+// PARAVA tudo esperando eles baixarem. Em área rural com sinal "fraco mas
+// conectado" (sem dados de verdade), cada um podia levar 30-60s até dar
+// erro — e o app inteiro ficava em branco esse tempo todo. Agora o app
+// abre na hora (os dados são locais) e o Firebase carrega em segundo plano,
+// com limite de 8s por arquivo. Se falhar, o app segue 100% local.
+// ------------------------------------------------------------------
+const FIREBASE_SDK_VERSION = '10.12.2';
+const FIREBASE_SDK_URLS = [
+  'https://www.gstatic.com/firebasejs/' + FIREBASE_SDK_VERSION + '/firebase-app-compat.js',
+  'https://www.gstatic.com/firebasejs/' + FIREBASE_SDK_VERSION + '/firebase-firestore-compat.js',
+  'https://www.gstatic.com/firebasejs/' + FIREBASE_SDK_VERSION + '/firebase-auth-compat.js',
+];
 let cloudDb = null;
 let cloudAuth = null;
-if (CLOUD_SYNC_ENABLED) {
+let _firebasePromise = null;
+function carregarScriptComLimite(src, ms) {
+  return new Promise((resolve) => {
+    const el = document.createElement('script');
+    let fim = false;
+    const terminar = (ok) => { if (fim) return; fim = true; clearTimeout(t); resolve(ok); };
+    const t = setTimeout(() => terminar(false), ms);
+    el.async = true;
+    el.onload = () => terminar(true);
+    el.onerror = () => terminar(false);
+    el.src = src;
+    document.head.appendChild(el);
+  });
+}
+function iniciarFirebaseApp() {
+  if (cloudAuth && cloudDb) return true;
   try {
-    firebase.initializeApp(CLOUD_CONFIG);
+    if (!firebase.apps.length) firebase.initializeApp(CLOUD_CONFIG);
     cloudDb = firebase.firestore();
     cloudAuth = firebase.auth();
-    // Guarda uma cópia local (IndexedDB do próprio Firestore) dos últimos
-    // dados lidos da nuvem — essencial para o app continuar funcionando
-    // se o celular reiniciar ou ficar sem internet bem no momento do login.
+    // Cópia local dos últimos dados lidos da nuvem (IndexedDB do Firestore).
     cloudDb.enablePersistence({ synchronizeTabs: true }).catch((e) => {
       console.warn('Cache offline do Firestore não disponível neste navegador (não é crítico):', e.code);
     });
+    return true;
   } catch (e) {
     console.warn('Não foi possível iniciar a sincronização em nuvem:', e);
+    cloudDb = null; cloudAuth = null;
+    return false;
   }
+}
+// Resolve true se o Firebase ficou pronto, false se não deu (sem internet etc.).
+// Nunca rejeita e nunca demora mais que ~8s por arquivo.
+function ensureFirebase() {
+  if (!CLOUD_SYNC_ENABLED) return Promise.resolve(false);
+  if (cloudAuth && cloudDb) return Promise.resolve(true);
+  if (_firebasePromise) return _firebasePromise;
+  _firebasePromise = (async () => {
+    try {
+      if (!(window.firebase && firebase.auth && firebase.firestore)) {
+        const okApp = await carregarScriptComLimite(FIREBASE_SDK_URLS[0], 8000);
+        if (!okApp) return false;
+        const [okDb, okAuth] = await Promise.all([
+          carregarScriptComLimite(FIREBASE_SDK_URLS[1], 8000),
+          carregarScriptComLimite(FIREBASE_SDK_URLS[2], 8000),
+        ]);
+        if (!okDb || !okAuth) return false;
+      }
+      return iniciarFirebaseApp();
+    } catch (e) {
+      return false;
+    }
+  })().then((ok) => { if (!ok) _firebasePromise = null; return ok; }); // permite tentar de novo depois
+  return _firebasePromise;
 }
 
 // Busca a configuração compartilhada na nuvem. Retorna null se a
@@ -4502,6 +4568,10 @@ function getOrCreateDeviceId() {
   }
 }
 const CURRENT_DEVICE_ID = getOrCreateDeviceId();
+// Login lembrado neste aparelho: permite abrir o app NA HORA, sem esperar rede/Firebase.
+const AUTH_CACHE_KEY = 'fotoprova_last_user';
+const SIGNOUT_PENDING_KEY = 'fotoprova_signout_pending';
+const PENDING_REPORTS_KEY = 'fotoprova_pending_reports';
 
 // Logo oficial do app (marca Revistec), embutida como imagem para ser
 // desenhada sempre no canto superior ESQUERDO de toda foto/vídeo gerado
@@ -4542,10 +4612,11 @@ const cidadePorCoordCache = {};
 async function buscarCidadePorCoordenada(lat, lon) {
   const chave = lat.toFixed(3) + ',' + lon.toFixed(3);
   if (cidadePorCoordCache[chave] !== undefined) return cidadePorCoordCache[chave];
+  if (navigator.onLine === false) return null; // sem rede: nem tenta
   try {
     const url = 'https://nominatim.openstreetmap.org/reverse?format=json&lat=' + lat + '&lon=' + lon + '&zoom=10&addressdetails=1';
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 4000);
+    const timer = setTimeout(() => controller.abort(), 2500);
     const res = await fetch(url, { signal: controller.signal, headers: { 'Accept-Language': 'pt-BR' } });
     clearTimeout(timer);
     const data = await res.json();
@@ -4627,6 +4698,17 @@ async function onUserLoggedIn(user) {
     data.reportsThisMonth = 0;
   }
   if (data.reportsTotal === undefined) data.reportsTotal = data.reportsThisMonth || 0;
+  if (onlineOk) {
+    let pend = 0;
+    try { pend = parseInt(localStorage.getItem(PENDING_REPORTS_KEY) || '0', 10) || 0; } catch (e) { /* ignora */ }
+    if (pend > 0) {
+      data.reportsTotal = (data.reportsTotal || 0) + pend;
+      if (!ADMIN_EMAILS.includes((data.email || '').toLowerCase()) && !contaEhProNesteAparelho(data)) {
+        data.reportsThisMonth = (data.reportsThisMonth || 0) + pend;
+      }
+      try { localStorage.removeItem(PENDING_REPORTS_KEY); } catch (e) { /* ignora */ }
+    }
+  }
   currentUserAccount = data;
   renderAccountStatus();
 
@@ -4636,6 +4718,7 @@ async function onUserLoggedIn(user) {
     if (data.lastSeenDeviceId !== CURRENT_DEVICE_ID) { patch.lastSeenDeviceId = CURRENT_DEVICE_ID; data.lastSeenDeviceId = CURRENT_DEVICE_ID; }
     patch.monthKey = data.monthKey;
     patch.reportsThisMonth = data.reportsThisMonth;
+    patch.reportsTotal = data.reportsTotal;
     withTimeout(ref.update(patch), 5000).catch(() => { /* não crítico */ });
   }
 }
@@ -4664,7 +4747,7 @@ function renderAccountStatus() {
 // funciona sem limite algum — o mesmo de sempre. O e-mail administrador
 // nunca é bloqueado, independentemente do campo "plan" salvo no Firestore.
 async function podeExigirCotaDeRelatorio() {
-  if (!CLOUD_SYNC_ENABLED || !cloudAuth || !currentUserAccount) return true;
+  if (!CLOUD_SYNC_ENABLED || !currentUserAccount) return true;
   if (ADMIN_EMAILS.includes((currentUserAccount.email || '').toLowerCase())) return true;
   if (contaEhProNesteAparelho(currentUserAccount)) return true;
   if (currentUserAccount.plan === 'pro') {
@@ -4683,13 +4766,19 @@ async function podeExigirCotaDeRelatorio() {
 // Nunca impede a criação em si — só falha silenciosamente se o Firestore
 // estiver fora do ar (o relatório já foi salvo localmente de qualquer jeito).
 async function registrarRelatorioCriado() {
-  if (!CLOUD_SYNC_ENABLED || !cloudAuth || !currentUserUid || !currentUserAccount) return;
+  if (!CLOUD_SYNC_ENABLED || !currentUserUid || !currentUserAccount) return;
   currentUserAccount.reportsTotal = (currentUserAccount.reportsTotal || 0) + 1;
   const isAdmin = ADMIN_EMAILS.includes((currentUserAccount.email || '').toLowerCase());
   if (!isAdmin && !contaEhProNesteAparelho(currentUserAccount)) {
     currentUserAccount.reportsThisMonth = (currentUserAccount.reportsThisMonth || 0) + 1;
   }
   renderAccountStatus();
+  try { localStorage.setItem('fotoprova_account_' + currentUserUid, JSON.stringify(currentUserAccount)); } catch (e) { /* não crítico */ }
+  if (!cloudDb) {
+    // Firebase ainda não carregou (sem internet): guarda a contagem e envia no próximo login online.
+    try { localStorage.setItem(PENDING_REPORTS_KEY, String((parseInt(localStorage.getItem(PENDING_REPORTS_KEY) || '0', 10) || 0) + 1)); } catch (e) { /* não crítico */ }
+    return;
+  }
   try {
     await cloudDb.collection('users').doc(currentUserUid).update({
       reportsThisMonth: currentUserAccount.reportsThisMonth,
@@ -4708,7 +4797,8 @@ function setAuthMode(mode) {
   document.getElementById('auth-submit').textContent = mode === 'login' ? 'Entrar' : 'Criar conta';
   document.getElementById('auth-error').style.display = 'none';
 }
-if (CLOUD_SYNC_ENABLED && cloudAuth) {
+if (CLOUD_SYNC_ENABLED) {
+  const MSG_SEM_INTERNET = 'Sem conexão agora. O PRIMEIRO login precisa de internet; depois o app abre direto, mesmo sem sinal.';
   document.getElementById('auth-tab-login').addEventListener('click', () => setAuthMode('login'));
   document.getElementById('auth-tab-signup').addEventListener('click', () => setAuthMode('signup'));
   document.getElementById('auth-submit').addEventListener('click', async () => {
@@ -4717,6 +4807,9 @@ if (CLOUD_SYNC_ENABLED && cloudAuth) {
     const errEl = document.getElementById('auth-error');
     errEl.style.display = 'none';
     if (!email || !password) { errEl.textContent = 'Preencha e-mail e senha.'; errEl.style.display = ''; return; }
+    errEl.textContent = 'Conectando...'; errEl.style.display = '';
+    if (!(await ensureFirebase())) { errEl.textContent = MSG_SEM_INTERNET; return; }
+    errEl.style.display = 'none';
     try {
       if (authMode === 'login') {
         await cloudAuth.signInWithEmailAndPassword(email, password);
@@ -4731,6 +4824,7 @@ if (CLOUD_SYNC_ENABLED && cloudAuth) {
   document.getElementById('auth-google').addEventListener('click', async () => {
     const errEl = document.getElementById('auth-error');
     errEl.style.display = 'none';
+    if (!(await ensureFirebase())) { errEl.textContent = MSG_SEM_INTERNET; errEl.style.display = ''; return; }
     try {
       const provider = new firebase.auth.GoogleAuthProvider();
       await cloudAuth.signInWithPopup(provider);
@@ -4741,7 +4835,16 @@ if (CLOUD_SYNC_ENABLED && cloudAuth) {
   });
   document.getElementById('btn-logout').addEventListener('click', async () => {
     if (confirm('Sair da conta neste aparelho?')) {
-      await cloudAuth.signOut();
+      try { localStorage.removeItem(AUTH_CACHE_KEY); } catch (e) { /* ignora */ }
+      let saiu = false;
+      if (cloudAuth) { try { await cloudAuth.signOut(); saiu = true; } catch (e) { /* ignora */ } }
+      if (!saiu) {
+        // Firebase não carregou (sem internet): sai da tela já, e finaliza a saída quando conectar.
+        try { localStorage.setItem(SIGNOUT_PENDING_KEY, '1'); } catch (e) { /* ignora */ }
+        currentUserAccount = null; currentUserUid = null;
+        document.getElementById('account-status-card').style.display = 'none';
+        document.getElementById('auth-gate').style.display = '';
+      }
     }
   });
   document.getElementById('btn-upgrade-pro').addEventListener('click', () => {
@@ -5524,6 +5627,7 @@ async function renderPoleScreen() {
         tile.innerHTML = `
           <span class="slot-badge ${slot}">${label}</span>
           <img src="${ph.thumbDataUrl}">
+          <button class="photo-replace" data-replace-photo="${ph.id}" title="Substituir por outra foto do aparelho">🔄</button>
           <button class="photo-annotate" data-annotate-photo="${ph.id}" title="Anotar/Medir">✏️</button>
           <button class="photo-del" data-del-photo="${ph.id}" title="Remover">🗑️</button>
           ${ph.caption ? `<div class="photo-cap">${escapeHtml(ph.caption)}</div>` : ''}
@@ -5545,6 +5649,7 @@ async function renderPoleScreen() {
     tile.className = 'photo-tile' + (p.isBase ? ' is-base' : '') + (p.annotationShapes && p.annotationShapes.length ? ' has-annotation' : '');
     tile.innerHTML = `
       <img src="${p.thumbDataUrl}">
+      <button class="photo-replace" data-replace-photo="${p.id}" title="Substituir por outra foto do aparelho">🔄</button>
       <button class="photo-annotate" data-annotate-photo="${p.id}" title="Anotar/Medir">✏️</button>
       <button class="photo-del" data-del-photo="${p.id}" title="Remover">🗑️</button>
       ${p.caption ? `<div class="photo-cap">${escapeHtml(p.caption)}</div>` : ''}
@@ -5555,6 +5660,16 @@ async function renderPoleScreen() {
     btn.addEventListener('click', async (ev) => {
       ev.stopPropagation();
       openAnnotateEditor(btn.dataset.annotatePhoto);
+    });
+  });
+  grid.querySelectorAll('[data-replace-photo]').forEach(btn => {
+    btn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      if (!confirm('Substituir esta foto por outra que está no armazenamento do aparelho?\n\nA foto atual sai do relatório (e da pasta Fotos, se estiver ligada). A nova recebe o mesmo carimbo padrão, com Nota/OS, Equipe e Supervisor.')) return;
+      state.replacePhotoId = btn.dataset.replacePhoto;
+      const input = document.getElementById('replace-photo-input');
+      input.value = '';
+      input.click();
     });
   });
   grid.querySelectorAll('[data-del-photo]').forEach(btn => {
@@ -6529,18 +6644,19 @@ function baixarTileDeMapa(lat, lon, zoom) {
     try {
       const { x, y } = latLngParaTileXY(lat, lon, zoom);
       const sub = ['a', 'b', 'c'][(x + y) % 3];
+      if (navigator.onLine === false) { resolve(null); return; }
       const url = `https://${sub}.tile.openstreetmap.org/${zoom}/${x}/${y}.png`;
       const img = new Image();
       img.crossOrigin = 'anonymous';
       let done = false;
-      const timer = setTimeout(() => { if (!done) { done = true; resolve(null); } }, 4000);
+      const timer = setTimeout(() => { if (!done) { done = true; resolve(null); } }, 2500);
       img.onload = () => { if (!done) { done = true; clearTimeout(timer); resolve(img); } };
       img.onerror = () => { if (!done) { done = true; clearTimeout(timer); resolve(null); } };
       img.src = url;
     } catch (e) { resolve(null); }
   });
 }
-function drawLocationWatermark(canvas, coord, dateObj, extraLines, mapTileImg, cidade, opacidadeFundo) {
+function drawLocationWatermark(canvas, coord, dateObj, extraLines, mapTileImg, cidade, opacidadeFundo, linhasPequenas) {
   const ctx = canvas.getContext('2d');
   const W = canvas.width, H = canvas.height;
   const pad = Math.max(8, W * 0.018);
@@ -6555,12 +6671,26 @@ function drawLocationWatermark(canvas, coord, dateObj, extraLines, mapTileImg, c
   textLines.push(dateObj.toLocaleDateString('pt-BR') + '  ' + dateObj.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
   (extraLines || []).forEach((l) => { if (l) textLines.push(l); });
 
+  // Linhas pequenas e discretas (dados de auditoria: Nota/OS, Equipe, Supervisor),
+  // uma abaixo da outra. Quem precisar conferir, dá zoom na foto.
+  const smallFont = Math.max(9, Math.round(W * 0.0125));
+  const smallLineH = smallFont * 1.45;
+  ctx.font = smallFont + 'px sans-serif';
+  const smallMaxW = W - pad * 2 - mapSize - pad * 0.8 * 3;
+  const smallLines = (linhasPequenas || []).filter(Boolean).map((l) => {
+    while (l.length > 4 && ctx.measureText(l).width > smallMaxW) l = l.slice(0, -2).trimEnd() + '…';
+    return l;
+  });
+  const smallBlockH = smallLines.length * smallLineH;
+
   ctx.font = 'bold ' + fontSize + 'px sans-serif';
   let maxTextW = 0;
   textLines.forEach((l) => { maxTextW = Math.max(maxTextW, ctx.measureText(l).width); });
+  ctx.font = smallFont + 'px sans-serif';
+  smallLines.forEach((l) => { maxTextW = Math.max(maxTextW, ctx.measureText(l).width); });
 
   const innerPad = pad * 0.8;
-  const boxH = Math.max(mapSize + innerPad * 2, textLines.length * lineH + innerPad * 2);
+  const boxH = Math.max(mapSize + innerPad * 2, textLines.length * lineH + smallBlockH + innerPad * 2);
   const boxW = mapSize + innerPad * 3 + maxTextW;
   const boxX = pad, boxY = H - boxH - pad;
   const radius = Math.max(6, W * 0.008);
@@ -6612,11 +6742,17 @@ function drawLocationWatermark(canvas, coord, dateObj, extraLines, mapTileImg, c
   // Texto alinhado embaixo do cartão (justificado na base), não mais
   // centralizado verticalmente — fica mais parecido com apps de GPS/mapa.
   const textX = mapX + mapSize + innerPad;
-  const blocoTextoH = textLines.length * lineH;
+  const blocoTextoH = textLines.length * lineH + smallBlockH;
   let textY = boxY + boxH - innerPad - blocoTextoH + fontSize * 0.9;
   ctx.fillStyle = '#fff';
   ctx.font = 'bold ' + fontSize + 'px sans-serif';
   textLines.forEach((l, i) => ctx.fillText(l, textX, textY + i * lineH));
+  if (smallLines.length) {
+    const smallTop = boxY + boxH - innerPad - smallBlockH;
+    ctx.fillStyle = 'rgba(255,255,255,0.88)';
+    ctx.font = smallFont + 'px sans-serif';
+    smallLines.forEach((l, j) => ctx.fillText(l, textX, smallTop + j * smallLineH + smallFont * 0.95));
+  }
   ctx.restore();
 }
 
@@ -6655,7 +6791,57 @@ function insertGpsExif(jpegDataUrl, coord, dateObj) {
 }
 function pad2(n) { return n < 10 ? '0' + n : '' + n; }
 
-async function processImage(img, coord, capturedAt, poleLabel, isBase) {
+// Foto que JÁ saiu do Revistec com carimbo (marca no EXIF gravada por insertGpsExif).
+function fotoJaCarimbadaRevistec(dataUrl) {
+  try { return (piexif.load(dataUrl)['0th'] || {})[piexif.ImageIFD.Software] === 'Relatorio Fotografico de Campo'; }
+  catch (e) { return false; }
+}
+// Data/hora em que a foto foi tirada, lida do EXIF (ou null).
+function lerDataDoExif(dataUrl) {
+  try {
+    const ex = piexif.load(dataUrl);
+    const v = (ex.Exif && ex.Exif[piexif.ExifIFD.DateTimeOriginal]) || (ex['0th'] && ex['0th'][piexif.ImageIFD.DateTime]);
+    const m = v && /^(\d{4}):(\d{2}):(\d{2}) (\d{2}):(\d{2}):(\d{2})/.exec(v);
+    return m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime() : null;
+  } catch (e) { return null; }
+}
+// Grava coordenada/data no ORIGINAL sem marca (sem apagar o EXIF que a câmera já gravou,
+// como a orientação). Se algo falhar, devolve o original intacto.
+function gravarGpsNoOriginal(dataUrl, coord, dateObj) {
+  try {
+    let ex;
+    try { ex = piexif.load(dataUrl); } catch (e) { ex = { '0th': {}, 'Exif': {}, 'GPS': {} }; }
+    ex['0th'] = ex['0th'] || {}; ex.Exif = ex.Exif || {}; ex.GPS = ex.GPS || {};
+    if (!ex['0th'][piexif.ImageIFD.Software]) ex['0th'][piexif.ImageIFD.Software] = 'Relatorio Fotografico de Campo (original)';
+    if (!ex.Exif[piexif.ExifIFD.DateTimeOriginal] && dateObj) {
+      ex.Exif[piexif.ExifIFD.DateTimeOriginal] = dateObj.getFullYear() + ':' + pad2(dateObj.getMonth() + 1) + ':' + pad2(dateObj.getDate()) + ' ' +
+        pad2(dateObj.getHours()) + ':' + pad2(dateObj.getMinutes()) + ':' + pad2(dateObj.getSeconds());
+    }
+    if (coord && typeof coord.lat === 'number' && typeof coord.lng === 'number' && !ex.GPS[piexif.GPSIFD.GPSLatitude]) {
+      ex.GPS[piexif.GPSIFD.GPSLatitudeRef] = coord.lat >= 0 ? 'N' : 'S';
+      ex.GPS[piexif.GPSIFD.GPSLatitude] = piexif.GPSHelper.degToDmsRational(coord.lat);
+      ex.GPS[piexif.GPSIFD.GPSLongitudeRef] = coord.lng >= 0 ? 'E' : 'W';
+      ex.GPS[piexif.GPSIFD.GPSLongitude] = piexif.GPSHelper.degToDmsRational(coord.lng);
+    }
+    return piexif.insert(piexif.dump(ex), dataUrl);
+  } catch (e) { return dataUrl; }
+}
+
+// Dados de auditoria que saem em letra pequena, um por linha, no cartão da foto:
+// Nota/OS, Equipe e Supervisor (preenchidos ao criar o relatório).
+function linhasAuditoriaRelatorio(report, coord) {
+  const l = [];
+  if (report) {
+    if (report.nota) l.push('Nota/OS: ' + report.nota);
+    if (report.equipe) l.push('Equipe: ' + report.equipe);
+    if (report.supervisor) l.push('Supervisor: ' + report.supervisor);
+  }
+  if (coord && coord.manual) l.push('Coordenada informada manualmente');
+  else if (coord && coord.fromExif) l.push('Coordenada: GPS gravado pela câmera');
+  return l;
+}
+
+async function processImage(img, coord, capturedAt, poleLabel, isBase, report) {
   const dateObj = new Date(capturedAt);
   const dateStr = dateObj.toLocaleDateString('pt-BR') + ' ' + dateObj.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
   const coordLine = coord ? `${coord.lat.toFixed(6)}, ${coord.lng.toFixed(6)}${coord.manual ? ' (manual)' : coord.fromExif ? ' (GPS câmera)' : ''}` : 'sem coordenada';
@@ -6663,17 +6849,24 @@ async function processImage(img, coord, capturedAt, poleLabel, isBase) {
   // versão de trabalho (usada no app, no PDF e no KMZ) — reduzida para caber
   // bem no armazenamento e nos relatórios, mantendo boa legibilidade.
   const workCanvas = resizeToCanvas(img, 1600);
-  drawWatermark(workCanvas, [poleLabel + (isBase ? ' (pé do poste)' : ''), coordLine, dateStr]);
-  await getRevistecMarkImg();
-  drawRevistecMark(workCanvas); // marca do app no canto superior esquerdo, em toda foto do relatório
 
-  // Logo da empresa nas fotos do relatório:
-  // usa exatamente a mesma configuração da "Foto/vídeo avulsa",
-  // posicionada no canto superior direito. Assim, a foto arquivada
-  // na pasta Fotos e a foto exibida no relatório carregam a identidade
-  // da empresa diretamente na própria imagem.
-  await loadEvidenceHeaderInfo();
+  // ESTILO ÚNICO: a foto do relatório sai com o mesmo cartão da foto avulsa
+  // (mini-mapa, coordenada, cidade, data/hora), logo da empresa à direita e marca
+  // Revistec à esquerda. Assim, vista sozinha na pasta Fotos, é igual à avulsa.
+  await loadEvidenceHeaderInfo(); // logo, nome e opacidade configurados
+  await getRevistecMarkImg();
+  let mapTileImg = null, cidade = null;
+  if (coord) {
+    // em paralelo e com limite curto: sem sinal, não atrasa a foto
+    [mapTileImg, cidade] = await Promise.all([
+      baixarTileDeMapa(coord.lat, coord.lng, 17).catch(() => null),
+      buscarCidadePorCoordenada(coord.lat, coord.lng).catch(() => null),
+    ]);
+  }
+  const rotulo = poleLabel + (isBase ? ' (pé do poste)' : '');
+  drawLocationWatermark(workCanvas, coord, dateObj, [rotulo], mapTileImg, cidade, currentWatermarkOpacity, linhasAuditoriaRelatorio(report, coord));
   drawDiscreteCompanyMark(workCanvas);
+  drawRevistecMark(workCanvas);
 
   let workDataUrl = workCanvas.toDataURL('image/jpeg', 0.85);
   workDataUrl = insertGpsExif(workDataUrl, coord, dateObj);
@@ -6724,7 +6917,9 @@ async function handleCameraFile(file) {
     showSpinner('Processando foto...');
     const capturedAt = Date.now();
     const stampLabel = slot ? pole.label + ' — ' + (slot === 'antes' ? 'ANTES' : 'DEPOIS') : pole.label;
-    const { workDataUrl, thumbDataUrl } = await processImage(img, coord, capturedAt, stampLabel, isBase && !slot);
+    let reportDaFoto = null;
+    try { reportDaFoto = await dbGet('reports', pole.reportId || state.currentReportId); } catch (e) { /* segue sem os dados */ }
+    const { workDataUrl, thumbDataUrl } = await processImage(img, coord, capturedAt, stampLabel, isBase && !slot, reportDaFoto);
 
     state.pendingCapture.coord = coord;
     state.pendingCapture.capturedAt = capturedAt;
@@ -6898,6 +7093,26 @@ async function savePhotoToLocalFolder(photo, report) {
   return true;
 }
 
+// Remove da pasta Fotos o arquivo de uma foto que foi substituída (se a pasta estiver ligada).
+// Usa o mesmo nome que savePhotoToLocalFolder gravou. Falha em silêncio.
+async function removePhotoFromLocalFolder(photo, report) {
+  try {
+    if (!photo || !report) return false;
+    if (!localRootHandle) await restoreLocalRootHandle();
+    const folders = await getReportFolders(report, false);
+    if (!folders) return false;
+    const pole = await dbGet('poles', photo.poleId);
+    const poleName = sanitizeFilename(pole ? pole.label : 'Poste') || 'Poste';
+    const poleFolder = await folders.fotos.getDirectoryHandle(poleName, { create: false });
+    const d = new Date(photo.capturedAt || Date.now());
+    const stamp = [d.getFullYear(), pad2(d.getMonth() + 1), pad2(d.getDate()), '_', pad2(d.getHours()), pad2(d.getMinutes()), pad2(d.getSeconds())].join('');
+    const base = photo.isBase ? '_PE' : '';
+    const slotTag = photo.slot === 'antes' ? '_ANTES' : photo.slot === 'depois' ? '_DEPOIS' : '';
+    await poleFolder.removeEntry(`${poleName}${slotTag}_${stamp}_${photo.id.slice(-6)}${base}.jpg`);
+    return true;
+  } catch (e) { return false; }
+}
+
 // Regrava TODAS as fotos do relatório que estão no IndexedDB na pasta Fotos.
 // Esta é a função de resgate: ela não apaga dados do banco e não depende de
 // as fotos terem sido copiadas corretamente no momento da captura.
@@ -6972,6 +7187,68 @@ async function addCaptionToImage(dataUrl, caption) {
   // junto das coordenadas/data, para não cobrir a imagem.
   return dataUrl;
 }
+// ---- Substituir uma foto do relatório por outra importada do armazenamento ----
+async function importarFotoParaSubstituir(file, fotoAntiga) {
+  showSpinner('Lendo a foto...');
+  try {
+    const pole = await dbGet('poles', fotoAntiga.poleId);
+    const report = await dbGet('reports', fotoAntiga.reportId);
+    const { img, dataUrl: originalDataUrl } = await loadImageFromFile(file);
+    const slot = fotoAntiga.slot || null;
+    const isBase = !!fotoAntiga.isBase;
+
+    // Coordenada: a gravada na própria foto (nunca o GPS de agora, que é de outro momento).
+    let coord = extractGpsFromDataUrl(originalDataUrl);
+    if (!coord) {
+      hideSpinner();
+      const ref = pole && pole.baseCoord;
+      if (ref && confirm('Esta foto não tem GPS gravado.\n\nUsar a coordenada já travada desta atividade (' + ref.lat.toFixed(5) + ', ' + ref.lng.toFixed(5) + ')?\n\nToque em Cancelar para informar outra coordenada.')) {
+        coord = { lat: ref.lat, lng: ref.lng, accuracy: null, manual: true };
+      } else {
+        coord = await askForCoordWithFallback('Esta foto não tem GPS gravado. Informe a coordenada do local.');
+        if (!coord) return; // cancelou
+      }
+    }
+    const capturedAt = lerDataDoExif(originalDataUrl) || file.lastModified || Date.now();
+    const stampLabel = slot ? pole.label + ' — ' + (slot === 'antes' ? 'ANTES' : 'DEPOIS') : pole.label;
+
+    let workDataUrl, thumbDataUrl;
+    if (fotoJaCarimbadaRevistec(originalDataUrl)) {
+      hideSpinner();
+      if (!confirm('Esta foto JÁ TEM o carimbo do Revistec (foi feita como avulsa).\n\nPara ficar idêntica às outras do relatório, com Nota/OS, Equipe e Supervisor, importe a versão "original sem marca d\'água" (botão na tela de foto avulsa).\n\nOK = usar esta foto como está.\nCancelar = escolher outra.')) return;
+      showSpinner('Processando foto...');
+      if (img.width <= 1700 && img.height <= 1700) {
+        workDataUrl = originalDataUrl;
+      } else {
+        workDataUrl = insertGpsExif(resizeToCanvas(img, 1600).toDataURL('image/jpeg', 0.85), coord, new Date(capturedAt));
+      }
+      thumbDataUrl = resizeToCanvas(img, 260).toDataURL('image/jpeg', 0.7);
+    } else {
+      showSpinner('Processando foto...');
+      ({ workDataUrl, thumbDataUrl } = await processImage(img, coord, capturedAt, stampLabel, isBase && !slot, report));
+    }
+
+    state.pendingCapture = { poleId: fotoAntiga.poleId, isBase, slot, coord, capturedAt, workDataUrl, thumbDataUrl, replacePhotoId: fotoAntiga.id };
+    hideSpinner();
+    document.getElementById('modal-caption-preview').src = workDataUrl;
+    document.getElementById('modal-caption-meta').textContent =
+      '🔄 Substituindo foto — coordenada: ' + coord.lat.toFixed(6) + ', ' + coord.lng.toFixed(6) + ' — ' + new Date(capturedAt).toLocaleString('pt-BR');
+    document.getElementById('modal-caption-text').value = fotoAntiga.caption || '';
+    document.getElementById('modal-caption').classList.add('show');
+  } catch (e) {
+    hideSpinner();
+    alert('Não consegui importar a foto: ' + e.message);
+  }
+}
+document.getElementById('replace-photo-input').addEventListener('change', async (ev) => {
+  const file = ev.target.files[0];
+  const id = state.replacePhotoId;
+  if (!file || !id) return;
+  const antiga = await dbGet('photos', id);
+  if (!antiga) return;
+  await importarFotoParaSubstituir(file, antiga);
+});
+
 document.getElementById('modal-caption-save').addEventListener('click', async () => {
   const pc = state.pendingCapture;
   if (!pc) return;
@@ -6991,6 +7268,17 @@ document.getElementById('modal-caption-save').addEventListener('click', async ()
     slot: pc.slot || null,
   };
   await dbPut('photos', photo);
+  if (pc.replacePhotoId) {
+    // A nova já está gravada; só então remove a antiga (nunca fica sem foto).
+    try {
+      const antiga = await dbGet('photos', pc.replacePhotoId);
+      if (antiga) {
+        const repAntigo = await dbGet('reports', antiga.reportId);
+        await removePhotoFromLocalFolder(antiga, repAntigo);
+        await dbDelete('photos', pc.replacePhotoId);
+      }
+    } catch (e) { console.warn('Não consegui remover a foto antiga:', e); }
+  }
 
   // Salva também a foto processada na subpasta Fotos, quando uma pasta local
   // foi selecionada. O banco IndexedDB continua sendo a cópia de segurança.
@@ -7208,6 +7496,32 @@ function drawDiscreteCompanyMark(canvas) {
 // localização (mapinha + pino + coordenada/data + descrição) no canto
 // inferior esquerdo, e a logo/nome da empresa discretamente no canto
 // superior direito.
+// ---- Assunto fixo das fotos/vídeos avulsos (ex.: número da viatura) ----
+const EVIDENCE_SUBJECT_KEY = 'fotoprova_evidence_subject';
+function getEvidenceSubject() {
+  const el = document.getElementById('evidence-subject');
+  return el ? el.value.trim() : '';
+}
+function saveEvidenceSubject() {
+  try { localStorage.setItem(EVIDENCE_SUBJECT_KEY, getEvidenceSubject()); } catch (e) { /* não crítico */ }
+}
+function loadEvidenceSubject() {
+  let v = '';
+  try { v = localStorage.getItem(EVIDENCE_SUBJECT_KEY) || ''; } catch (e) { /* ignora */ }
+  const el = document.getElementById('evidence-subject');
+  if (el) el.value = v;
+}
+function evidenceFilePrefix() {
+  const a = getEvidenceSubject();
+  return (a ? sanitizeFilename(a) + '_' : '') + 'evidencia_';
+}
+document.addEventListener('DOMContentLoaded', loadEvidenceSubject);
+document.getElementById('evidence-subject').addEventListener('input', saveEvidenceSubject);
+document.getElementById('evidence-subject-clear').addEventListener('click', () => {
+  const el = document.getElementById('evidence-subject');
+  el.value = ''; saveEvidenceSubject(); el.focus();
+});
+
 async function buildEvidenceStampedPhoto(img, coord, capturedAt, description, shapes) {
   const dateObj = new Date(capturedAt);
   const canvas = resizeToCanvas(img, 1600);
@@ -7218,7 +7532,7 @@ async function buildEvidenceStampedPhoto(img, coord, capturedAt, description, sh
     try { cidade = await buscarCidadePorCoordenada(coord.lat, coord.lng); } catch (e) { cidade = null; }
   }
   await getRevistecMarkImg();
-  drawLocationWatermark(canvas, coord, dateObj, description ? [description] : [], mapTileImg, cidade, currentWatermarkOpacity);
+  drawLocationWatermark(canvas, coord, dateObj, [getEvidenceSubject(), description].filter(Boolean), mapTileImg, cidade, currentWatermarkOpacity);
   drawDiscreteCompanyMark(canvas);
   drawRevistecMark(canvas);
   // Redesenha por cima as anotações (seta/texto) feitas no editor, se houver
@@ -7235,6 +7549,7 @@ async function buildEvidenceStampedPhoto(img, coord, capturedAt, description, sh
 }
 
 function openEvidenceModal() {
+  loadEvidenceSubject();
   document.getElementById('evidence-video-label').value = '';
   document.getElementById('evidence-photo-desc').value = '';
   document.getElementById('evidence-photo-area').style.display = 'none';
@@ -7369,14 +7684,14 @@ document.getElementById('evidence-photo-download').addEventListener('click', () 
   if (!evidenceState.photoDataUrl) return;
   const a = document.createElement('a');
   a.href = evidenceState.photoDataUrl;
-  a.download = 'evidencia_' + Date.now() + '.jpg';
+  a.download = evidenceFilePrefix() + Date.now() + '.jpg';
   document.body.appendChild(a); a.click(); a.remove();
   mostrarToast('✅ Foto baixada para o seu aparelho');
 });
 document.getElementById('evidence-photo-download-raw').addEventListener('click', () => {
   if (!evidenceState.photoRawOriginalDataUrl) return;
   const a = document.createElement('a');
-  a.href = evidenceState.photoRawOriginalDataUrl;
+  a.href = gravarGpsNoOriginal(evidenceState.photoRawOriginalDataUrl, evidenceState.photoCoord, new Date(evidenceState.photoCapturedAt || Date.now()));
   a.download = 'evidencia_original_sem_marca_' + Date.now() + '.jpg';
   document.body.appendChild(a); a.click(); a.remove();
   mostrarToast('✅ Original sem marca d\'água baixado');
@@ -7386,7 +7701,7 @@ document.getElementById('evidence-photo-share').addEventListener('click', async 
   try {
     const res = await fetch(evidenceState.photoDataUrl);
     const blob = await res.blob();
-    const file = new File([blob], 'evidencia.jpg', { type: 'image/jpeg' });
+    const file = new File([blob], evidenceFilePrefix() + Date.now() + '.jpg', { type: 'image/jpeg' });
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
       await navigator.share({ files: [file], title: 'Evidência de local' });
       mostrarToast('✅ Compartilhado');
@@ -7465,9 +7780,10 @@ document.getElementById('evidence-video-start').addEventListener('click', async 
 
   const drawFrame = () => {
     ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
-    const label = document.getElementById('evidence-video-label').value.trim() || 'Evidência de local';
+    const assunto = getEvidenceSubject();
+    const label = document.getElementById('evidence-video-label').value.trim() || (assunto ? '' : 'Evidência de local');
     const now = new Date();
-    drawLocationWatermark(canvas, evidenceState.recordCoord, now, [label], evidenceState.videoMapTileImg, evidenceState.videoCidade, currentWatermarkOpacity);
+    drawLocationWatermark(canvas, evidenceState.recordCoord, now, [assunto, label].filter(Boolean), evidenceState.videoMapTileImg, evidenceState.videoCidade, currentWatermarkOpacity);
     drawDiscreteCompanyMark(canvas);
     drawRevistecMark(canvas);
     evidenceState.overlayFrameId = requestAnimationFrame(drawFrame);
@@ -7525,7 +7841,7 @@ document.getElementById('evidence-video-download').addEventListener('click', () 
   if (!evidenceState.videoBlobUrl) return;
   const a = document.createElement('a');
   a.href = evidenceState.videoBlobUrl;
-  a.download = 'evidencia_' + Date.now() + '.webm';
+  a.download = evidenceFilePrefix() + Date.now() + '.webm';
   document.body.appendChild(a); a.click(); a.remove();
   mostrarToast('✅ Vídeo baixado para o seu aparelho');
 });
@@ -8374,30 +8690,71 @@ async function exportBackup(reportId) {
 // Inicialização
 // ============================================================
 function startAppAfterAuth() {
+  // Abre a tela de relatórios na hora — tudo aqui é local (IndexedDB).
   restoreLocalRootHandle().finally(() => goToReportsScreen());
-  syncSettingsFromCloudOnLoad().catch((e) => console.warn('Sincronização inicial falhou:', e));
 }
 
-if (CLOUD_SYNC_ENABLED && cloudAuth) {
-  document.getElementById('auth-gate').style.display = '';
+if (CLOUD_SYNC_ENABLED) {
   let appJaIniciado = false;
-  cloudAuth.onAuthStateChanged(async (user) => {
-    if (user) {
-      document.getElementById('auth-gate').style.display = 'none';
-      // Abre o app NA HORA (dados são locais); a conta/plano carrega em
-      // segundo plano e só atualiza o cartão de conta quando chegar.
-      if (!appJaIniciado) { appJaIniciado = true; startAppAfterAuth(); }
-      onUserLoggedIn(user).catch((e) => console.warn('Falha ao carregar conta:', e));
-    } else {
-      currentUserAccount = null;
-      currentUserUid = null;
-      document.getElementById('account-status-card').style.display = 'none';
-      document.getElementById('auth-gate').style.display = '';
+  const gate = document.getElementById('auth-gate');
+  let ultimoLogin = null;
+  try { ultimoLogin = JSON.parse(localStorage.getItem(AUTH_CACHE_KEY) || 'null'); } catch (e) { /* ignora */ }
+  if (ultimoLogin && ultimoLogin.uid) {
+    // Já logou antes neste aparelho: abre direto, SEM esperar rede nem Firebase.
+    gate.style.display = 'none';
+    currentUserUid = ultimoLogin.uid;
+    try {
+      const c = localStorage.getItem('fotoprova_account_' + ultimoLogin.uid);
+      if (c) { currentUserAccount = JSON.parse(c); renderAccountStatus(); }
+    } catch (e) { /* segue sem cache */ }
+    appJaIniciado = true;
+    startAppAfterAuth();
+  } else {
+    gate.style.display = '';
+  }
+
+  let listenerAtivo = false;
+  async function ativarAuthListener() {
+    if (listenerAtivo) return;
+    const ok = await ensureFirebase();
+    if (!ok) {
+      if (!appJaIniciado) {
+        const errEl = document.getElementById('auth-error');
+        errEl.textContent = 'Sem conexão agora. O PRIMEIRO login precisa de internet; depois o app abre direto, mesmo sem sinal.';
+        errEl.style.display = '';
+      }
+      return;
     }
-  });
+    if (listenerAtivo) return;
+    listenerAtivo = true;
+    syncSettingsFromCloudOnLoad().catch((e) => console.warn('Sincronização inicial falhou:', e));
+    cloudAuth.onAuthStateChanged(async (user) => {
+      if (user) {
+        let saidaPendente = false;
+        try { saidaPendente = !!localStorage.getItem(SIGNOUT_PENDING_KEY); } catch (e) { /* ignora */ }
+        if (saidaPendente) {
+          try { localStorage.removeItem(SIGNOUT_PENDING_KEY); } catch (e) { /* ignora */ }
+          try { await cloudAuth.signOut(); } catch (e) { /* ignora */ }
+          return;
+        }
+        try { localStorage.setItem(AUTH_CACHE_KEY, JSON.stringify({ uid: user.uid, email: user.email || '', ts: Date.now() })); } catch (e) { /* ignora */ }
+        gate.style.display = 'none';
+        if (!appJaIniciado) { appJaIniciado = true; startAppAfterAuth(); }
+        onUserLoggedIn(user).catch((e) => console.warn('Falha ao carregar conta:', e));
+      } else {
+        try { localStorage.removeItem(AUTH_CACHE_KEY); } catch (e) { /* ignora */ }
+        currentUserAccount = null;
+        currentUserUid = null;
+        document.getElementById('account-status-card').style.display = 'none';
+        gate.style.display = '';
+      }
+    });
+  }
+  ativarAuthListener();
+  // Voltou o sinal: tenta carregar o Firebase de novo (sincroniza conta/cota em segundo plano).
+  window.addEventListener('online', () => { ativarAuthListener(); });
 } else {
-  // Sem Firebase configurado: o app funciona 100% offline, sem login e
-  // sem limite de relatórios — exatamente como antes.
+  // Sem Firebase configurado: o app funciona 100% offline, sem login.
   startAppAfterAuth();
 }
 
