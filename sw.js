@@ -2,7 +2,7 @@
 // Objetivo: depois da primeira visita (com internet), o app deve abrir
 // e funcionar 100% mesmo sem nenhuma conexão, para uso em campo.
 
-const CACHE_NAME = 'relatorio-campo-v4'; // v4: link da empresa (?empresa=) abre do cache; v3: SDK do Firebase offline
+const CACHE_NAME = 'relatorio-campo-v5'; // v5: master troca de empresa offline; v4: link da empresa (?empresa=) abre do cache; v3: SDK do Firebase offline
 const APP_SHELL = [
   './',
   './index.html',

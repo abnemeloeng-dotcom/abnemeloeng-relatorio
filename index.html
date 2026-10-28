@@ -4552,6 +4552,51 @@ function refEmpresa(id) {
     ? cloudDb.collection(CLOUD_COLLECTION).doc(CLOUD_DOC_ID)
     : cloudDb.collection('empresas').doc(id);
 }
+// ---- Cópia local de CADA empresa (para o master trocar de empresa sem internet) ----
+const EMPRESAS_LISTA_KEY = 'fotoprova_empresas_lista';
+const PENDING_EMPRESA_KEY = 'fotoprova_pending_empresa';
+async function guardarFichaLocal(empresaId, data) {
+  if (!empresaId || !data) return;
+  try { await dbPut('settings', Object.assign({}, data, { id: 'empresa:' + empresaId })); } catch (e) { /* não crítico */ }
+}
+async function lerFichaLocal(empresaId) {
+  try {
+    const f = await dbGet('settings', 'empresa:' + empresaId);
+    if (!f) return null;
+    const c = Object.assign({}, f); delete c.id; return c;
+  } catch (e) { return null; }
+}
+function guardarListaEmpresas() {
+  try { localStorage.setItem(EMPRESAS_LISTA_KEY, JSON.stringify(adminEmpresasCache)); } catch (e) { /* não crítico */ }
+}
+function lerListaEmpresas() {
+  try { return JSON.parse(localStorage.getItem(EMPRESAS_LISTA_KEY) || '[]') || []; } catch (e) { return []; }
+}
+// Online: baixa e guarda a ficha de TODAS as empresas, em segundo plano (só master).
+let baixandoFichas = false;
+async function baixarFichasTodasEmpresas() {
+  if (baixandoFichas || !souAdminLogado() || navigator.onLine === false) return;
+  baixandoFichas = true;
+  try {
+    for (const e of adminEmpresasCache) {
+      const r = await fetchCloudSettingsDetalhado(e.id);
+      if (r.ok && r.exists) await guardarFichaLocal(e.id, r.data);
+    }
+  } finally { baixandoFichas = false; }
+}
+// Se o master trocou de empresa SEM internet, avisa a nuvem assim que voltar a conexão.
+async function enviarTrocaEmpresaPendente() {
+  let pend = null;
+  try { pend = localStorage.getItem(PENDING_EMPRESA_KEY); } catch (e) { /* ignora */ }
+  if (!pend || !currentUserUid || navigator.onLine === false) return;
+  try {
+    if (!(await ensureFirebase())) return;
+    await withTimeout(cloudDb.collection('users').doc(currentUserUid).update({ empresaId: pend }), 8000);
+    localStorage.removeItem(PENDING_EMPRESA_KEY);
+  } catch (e) { /* tenta de novo na próxima vez */ }
+}
+window.addEventListener('online', () => { enviarTrocaEmpresaPendente(); });
+
 // { ok: conseguiu falar com a nuvem, exists: a ficha existe, data }
 async function fetchCloudSettingsDetalhado(empresaId) {
   const ref = refEmpresa(empresaId === undefined ? empresaIdAtual() : empresaId);
@@ -4603,6 +4648,7 @@ async function syncSettingsFromCloudOnLoad() {
   try { marcado = localStorage.getItem(SETTINGS_EMPRESA_KEY); } catch (e) { /* ignora */ }
   if (r.exists) {
     await dbPut('settings', Object.assign({ id: 'default' }, r.data));
+    await guardarFichaLocal(id, r.data);
   } else if (marcado !== id && (marcado || id !== 'padrao')) {
     await dbPut('settings', { id: 'default', watermarkOpacity: 0.7, municipios: [], equipes: [], supervisores: [] });
   }
@@ -4627,6 +4673,7 @@ async function carregarEmpresasAdmin() {
     lista.forEach((e) => { e.codigo = porEmpresa[e.id] || ''; });
   } catch (e) { console.warn('Não consegui carregar empresas/códigos:', e); }
   adminEmpresasCache = lista;
+  guardarListaEmpresas();
 }
 
 // ============================================================
@@ -4822,8 +4869,14 @@ async function onUserLoggedIn(user) {
       try { localStorage.removeItem(PENDING_REPORTS_KEY); } catch (e) { /* ignora */ }
     }
   }
+  // Troca de empresa feita offline (master) tem prioridade sobre o que veio da nuvem.
+  try {
+    const pendEmp = localStorage.getItem(PENDING_EMPRESA_KEY);
+    if (pendEmp && ADMIN_EMAILS.includes((data.email || '').toLowerCase())) data.empresaId = pendEmp;
+  } catch (e) { /* ignora */ }
   currentUserAccount = data;
   renderAccountStatus();
+  if (onlineOk) enviarTrocaEmpresaPendente();
 
   // 3) Atualizações na nuvem em segundo plano, num único update (sem bloquear nada).
   if (onlineOk) {
@@ -4892,23 +4945,34 @@ async function entrarEmpresaPorCodigo(codigo) {
 }
 document.getElementById('master-empresa-select').addEventListener('change', async (ev) => {
   const novo = ev.target.value;
-  if (navigator.onLine === false || !(await ensureFirebase())) {
-    alert('Para trocar a empresa ativa é preciso estar online.');
+  const nomeDe = (id) => { const emp = adminEmpresasCache.find((x) => x.id === id); return emp ? emp.nome : id; };
+  const online = navigator.onLine !== false && (await ensureFirebase());
+  if (online) {
+    try {
+      await withTimeout(cloudDb.collection('users').doc(currentUserUid).update({ empresaId: novo }), 8000);
+      try { localStorage.removeItem(PENDING_EMPRESA_KEY); } catch (e) { /* ignora */ }
+      currentUserAccount.empresaId = novo;
+      try { localStorage.setItem('fotoprova_account_' + currentUserUid, JSON.stringify(currentUserAccount)); } catch (e) { /* não crítico */ }
+      await syncSettingsFromCloudOnLoad();
+      renderAccountStatus();
+      mostrarToast('🏢 Empresa ativa: ' + nomeDe(novo));
+      return;
+    } catch (e) { /* cai para a troca local abaixo */ }
+  }
+  // SEM INTERNET: troca usando a cópia da ficha guardada neste aparelho.
+  const ficha = await lerFichaLocal(novo);
+  if (!ficha) {
+    alert('Esta empresa ainda não foi baixada neste aparelho. Abra o app COM internet uma vez (como master) para guardar as duas empresas, depois a troca funciona em campo.');
     prepararSeletorMaster();
     return;
   }
-  try {
-    await withTimeout(cloudDb.collection('users').doc(currentUserUid).update({ empresaId: novo }), 8000);
-    currentUserAccount.empresaId = novo;
-    try { localStorage.setItem('fotoprova_account_' + currentUserUid, JSON.stringify(currentUserAccount)); } catch (e) { /* não crítico */ }
-    await syncSettingsFromCloudOnLoad();
-    renderAccountStatus();
-    const emp = adminEmpresasCache.find((x) => x.id === novo);
-    mostrarToast('🏢 Empresa ativa: ' + (emp ? emp.nome : novo));
-  } catch (e) {
-    alert('Não consegui trocar a empresa: ' + e.message);
-    prepararSeletorMaster();
-  }
+  await dbPut('settings', Object.assign({ id: 'default' }, ficha));
+  try { localStorage.setItem(SETTINGS_EMPRESA_KEY, novo); } catch (e) { /* ignora */ }
+  try { localStorage.setItem(PENDING_EMPRESA_KEY, novo); } catch (e) { /* ignora */ }
+  currentUserAccount.empresaId = novo;
+  try { localStorage.setItem('fotoprova_account_' + currentUserUid, JSON.stringify(currentUserAccount)); } catch (e) { /* não crítico */ }
+  renderAccountStatus();
+  mostrarToast('🏢 Empresa ativa (offline): ' + nomeDe(novo));
 });
 document.getElementById('btn-join-company').addEventListener('click', abrirModalEntrarEmpresa);
 document.getElementById('join-company-later').addEventListener('click', () => {
@@ -4935,9 +4999,11 @@ document.getElementById('join-company-submit').addEventListener('click', async (
 async function prepararSeletorMaster() {
   const box = document.getElementById('master-empresa-box');
   const sel = document.getElementById('master-empresa-select');
-  if (!box || !sel || !cloudDb) { if (box) box.style.display = 'none'; return; }
-  if (!adminEmpresasCache.length && navigator.onLine !== false) { try { await carregarEmpresasAdmin(); } catch (e) { /* ignora */ } }
+  if (!box || !sel) { if (box) box.style.display = 'none'; return; }
+  if (!adminEmpresasCache.length && cloudDb && navigator.onLine !== false) { try { await carregarEmpresasAdmin(); } catch (e) { /* ignora */ } }
+  if (!adminEmpresasCache.length) adminEmpresasCache = lerListaEmpresas(); // offline: lista guardada
   if (!adminEmpresasCache.length) { box.style.display = 'none'; return; }
+  baixarFichasTodasEmpresas(); // online: deixa as duas (ou mais) empresas prontas para uso offline
   sel.innerHTML = adminEmpresasCache.map((e) => `<option value="${String(e.id).replace(/"/g, '&quot;')}">${String(e.nome || '').replace(/</g, '&lt;')}</option>`).join('');
   sel.value = empresaIdAtual() || 'padrao';
   box.style.display = '';
@@ -7745,6 +7811,7 @@ async function openSettingsModal(empresaId) {
     if (r.ok && r.exists) {
       s = r.data;
       if (ehMinha) await dbPut('settings', Object.assign({ id: 'default' }, r.data));
+      await guardarFichaLocal(editId, r.data);
       syncStatus.style.color = 'var(--verde)';
       syncStatus.textContent = '☁️ Configuração da empresa carregada.';
     } else if (r.ok) {
@@ -8342,6 +8409,7 @@ document.getElementById('modal-settings-save').addEventListener('click', async (
     syncStatus.style.color = 'inherit';
     syncStatus.textContent = '🔄 Enviando para todos os aparelhos...';
     const ok = await pushCloudSettings(settings, editId);
+    if (editId) await guardarFichaLocal(editId, settings);
     if (ok) {
       syncStatus.style.color = 'var(--verde)';
       syncStatus.textContent = '✅ Salvo — os colaboradores desta empresa passam a ver essa configuração.';
